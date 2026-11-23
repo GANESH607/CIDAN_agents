@@ -1,0 +1,97 @@
+{
+  "timestamp": "2026-11-23T12:57:28Z",
+  "llm_mode": "stub",
+  "note": "Stub-mode scores test the pipeline's deterministic verification, alignment, table parsing, and validation logic, not the generative capabilities of an LLM.",
+  "overall_metrics": {
+    "obligation_precision": 1.0,
+    "obligation_recall": 0.9,
+    "obligation_f1": 0.947,
+    "citation_accuracy": 1.0,
+    "change_type_accuracy": 0.778,
+    "structured_output_validity_rate": 1.0,
+    "total_obligations_extracted": 9,
+    "fixtures_evaluated_count": 3
+  },
+  "confusion_matrix": {
+    "NEW": {
+      "NEW": 5,
+      "MODIFIED": 0,
+      "UNCHANGED": 0,
+      "SUPERSEDED": 0,
+      "POTENTIAL_CONFLICT": 0,
+      "NEEDS_REVIEW": 0
+    },
+    "MODIFIED": {
+      "NEW": 0,
+      "MODIFIED": 1,
+      "UNCHANGED": 0,
+      "SUPERSEDED": 0,
+      "POTENTIAL_CONFLICT": 0,
+      "NEEDS_REVIEW": 1
+    },
+    "UNCHANGED": {
+      "NEW": 0,
+      "MODIFIED": 1,
+      "UNCHANGED": 0,
+      "SUPERSEDED": 0,
+      "POTENTIAL_CONFLICT": 0,
+      "NEEDS_REVIEW": 0
+    },
+    "SUPERSEDED": {
+      "NEW": 0,
+      "MODIFIED": 0,
+      "UNCHANGED": 0,
+      "SUPERSEDED": 1,
+      "POTENTIAL_CONFLICT": 0,
+      "NEEDS_REVIEW": 0
+    },
+    "POTENTIAL_CONFLICT": {
+      "NEW": 0,
+      "MODIFIED": 0,
+      "UNCHANGED": 0,
+      "SUPERSEDED": 0,
+      "POTENTIAL_CONFLICT": 0,
+      "NEEDS_REVIEW": 0
+    },
+    "NEEDS_REVIEW": {
+      "NEW": 0,
+      "MODIFIED": 0,
+      "UNCHANGED": 0,
+      "SUPERSEDED": 0,
+      "POTENTIAL_CONFLICT": 0,
+      "NEEDS_REVIEW": 0
+    }
+  },
+  "per_fixture": {
+    "amendment_policy.pdf": {
+      "expected_count": 5,
+      "extracted_count": 5,
+      "true_positives": 5,
+      "false_positives": 0,
+      "false_negatives": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "standalone_kyc_circular.pdf": {
+      "expected_count": 3,
+      "extracted_count": 3,
+      "true_positives": 3,
+      "false_positives": 0,
+      "false_negatives": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "table_heavy.pdf": {
+      "expected_count": 2,
+      "extracted_count": 1,
+      "true_positives": 1,
+      "false_positives": 0,
+      "false_negatives": 1,
+      "precision": 1.0,
+      "recall": 0.5,
+      "f1": 0.667
+    }
+  }
+}

@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -9,14 +10,17 @@ from cidan.config import ROOT
 logger = logging.getLogger(__name__)
 
 WORKFLOW_OUTPUTS_DIR = ROOT / "workflow_outputs"
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 
 
-def get_agent1_output_dir(workflow_id: str) -> Path:
-    if not workflow_id or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in workflow_id):
+def get_agent1_output_dir(workflow_id: str, create: bool = True) -> Path:
+    if not workflow_id or not isinstance(workflow_id, str):
+        raise ValueError("Workflow ID must be a non-empty string.")
+    if not re.fullmatch(r"[a-zA-Z0-9_\-]+", workflow_id):
         raise ValueError(f"Invalid workflow ID: {workflow_id}")
     directory = WORKFLOW_OUTPUTS_DIR / workflow_id / "agent_1_obligation_extraction"
-    directory.mkdir(parents=True, exist_ok=True)
+    if create:
+        directory.mkdir(parents=True, exist_ok=True)
     return directory
 
 
@@ -28,110 +32,138 @@ def _atomic_write_json(file_path: Path, data: dict[str, Any] | list[Any]) -> Pat
     return file_path
 
 
+def _archive_run(output_dir: Path, filename: str, payload: dict[str, Any], extraction_run_id: str | None = None) -> None:
+    run_id = extraction_run_id or payload.get("extraction_run_id")
+    if run_id and re.fullmatch(r"[a-zA-Z0-9_\-]+", str(run_id)):
+        run_dir = output_dir / "runs" / str(run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(run_dir / filename, payload)
+
+
 def save_extracted_obligations(
     workflow_id: str,
     obligations: list[dict[str, Any]],
     total_count: int | None = None,
+    extraction_run_id: str | None = None,
 ) -> Path:
-    output_dir = get_agent1_output_dir(workflow_id)
+    output_dir = get_agent1_output_dir(workflow_id, create=True)
     payload = {
         "schema_version": SCHEMA_VERSION,
         "workflow_id": workflow_id,
+        "extraction_run_id": extraction_run_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "total_obligations": total_count if total_count is not None else len(obligations),
         "obligations": obligations,
     }
-    return _atomic_write_json(output_dir / "extracted_obligations.json", payload)
+    path = _atomic_write_json(output_dir / "extracted_obligations.json", payload)
+    _archive_run(output_dir, "extracted_obligations.json", payload, extraction_run_id)
+    return path
 
 
 def save_amendment_comparison(
     workflow_id: str,
     comparison: dict[str, Any],
+    extraction_run_id: str | None = None,
 ) -> Path:
-    output_dir = get_agent1_output_dir(workflow_id)
+    output_dir = get_agent1_output_dir(workflow_id, create=True)
     payload = {
         "schema_version": SCHEMA_VERSION,
         "workflow_id": workflow_id,
+        "extraction_run_id": extraction_run_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         **comparison,
     }
-    return _atomic_write_json(output_dir / "amendment_comparison.json", payload)
+    path = _atomic_write_json(output_dir / "amendment_comparison.json", payload)
+    _archive_run(output_dir, "amendment_comparison.json", payload, extraction_run_id)
+    return path
 
 
 def save_evidence_and_citations(
     workflow_id: str,
     evidence_records: list[dict[str, Any]],
+    extraction_run_id: str | None = None,
 ) -> Path:
-    output_dir = get_agent1_output_dir(workflow_id)
+    output_dir = get_agent1_output_dir(workflow_id, create=True)
     payload = {
         "schema_version": SCHEMA_VERSION,
         "workflow_id": workflow_id,
+        "extraction_run_id": extraction_run_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "total_citations": len(evidence_records),
         "evidence": evidence_records,
     }
-    return _atomic_write_json(output_dir / "evidence_and_citations.json", payload)
+    path = _atomic_write_json(output_dir / "evidence_and_citations.json", payload)
+    _archive_run(output_dir, "evidence_and_citations.json", payload, extraction_run_id)
+    return path
 
 
 def save_coverage_report(
     workflow_id: str,
     coverage: dict[str, Any],
+    extraction_run_id: str | None = None,
 ) -> Path:
-    output_dir = get_agent1_output_dir(workflow_id)
+    output_dir = get_agent1_output_dir(workflow_id, create=True)
     payload = {
         "schema_version": SCHEMA_VERSION,
         "workflow_id": workflow_id,
+        "extraction_run_id": extraction_run_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         **coverage,
     }
-    return _atomic_write_json(output_dir / "coverage_report.json", payload)
+    path = _atomic_write_json(output_dir / "coverage_report.json", payload)
+    _archive_run(output_dir, "coverage_report.json", payload, extraction_run_id)
+    return path
 
 
 def save_execution_metadata(
     workflow_id: str,
     metadata: dict[str, Any],
+    extraction_run_id: str | None = None,
 ) -> Path:
-    output_dir = get_agent1_output_dir(workflow_id)
+    output_dir = get_agent1_output_dir(workflow_id, create=True)
     payload = {
         "schema_version": SCHEMA_VERSION,
         "workflow_id": workflow_id,
+        "extraction_run_id": extraction_run_id or metadata.get("extraction_run_id"),
         "agent": "Agent 1 - Obligation Extraction",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         **metadata,
     }
-    return _atomic_write_json(output_dir / "execution_metadata.json", payload)
+    path = _atomic_write_json(output_dir / "execution_metadata.json", payload)
+    _archive_run(output_dir, "execution_metadata.json", payload, extraction_run_id)
+    return path
 
 
 def load_extracted_obligations(workflow_id: str) -> dict[str, Any]:
-    file_path = get_agent1_output_dir(workflow_id) / "extracted_obligations.json"
+    file_path = get_agent1_output_dir(workflow_id, create=False) / "extracted_obligations.json"
     if not file_path.is_file():
         raise FileNotFoundError(f"Extracted obligations not found for workflow {workflow_id}")
     return json.loads(file_path.read_text(encoding="utf-8"))
 
 
 def load_amendment_comparison(workflow_id: str) -> dict[str, Any]:
-    file_path = get_agent1_output_dir(workflow_id) / "amendment_comparison.json"
+    file_path = get_agent1_output_dir(workflow_id, create=False) / "amendment_comparison.json"
     if not file_path.is_file():
         raise FileNotFoundError(f"Amendment comparison not found for workflow {workflow_id}")
     return json.loads(file_path.read_text(encoding="utf-8"))
 
 
 def load_evidence_and_citations(workflow_id: str) -> dict[str, Any]:
-    file_path = get_agent1_output_dir(workflow_id) / "evidence_and_citations.json"
+    file_path = get_agent1_output_dir(workflow_id, create=False) / "evidence_and_citations.json"
     if not file_path.is_file():
         raise FileNotFoundError(f"Evidence and citations not found for workflow {workflow_id}")
     return json.loads(file_path.read_text(encoding="utf-8"))
 
 
 def load_coverage_report(workflow_id: str) -> dict[str, Any]:
-    file_path = get_agent1_output_dir(workflow_id) / "coverage_report.json"
+    file_path = get_agent1_output_dir(workflow_id, create=False) / "coverage_report.json"
     if not file_path.is_file():
         raise FileNotFoundError(f"Coverage report not found for workflow {workflow_id}")
     return json.loads(file_path.read_text(encoding="utf-8"))
 
 
 def load_execution_metadata(workflow_id: str) -> dict[str, Any]:
-    file_path = get_agent1_output_dir(workflow_id) / "execution_metadata.json"
+    file_path = get_agent1_output_dir(workflow_id, create=False) / "execution_metadata.json"
     if not file_path.is_file():
         raise FileNotFoundError(f"Execution metadata not found for workflow {workflow_id}")
     return json.loads(file_path.read_text(encoding="utf-8"))
@@ -139,7 +171,7 @@ def load_execution_metadata(workflow_id: str) -> dict[str, Any]:
 
 def load_agent1_summary(workflow_id: str) -> dict[str, Any]:
     """Load high-level overview metrics and execution state for Agent 1."""
-    out_dir = get_agent1_output_dir(workflow_id)
+    out_dir = get_agent1_output_dir(workflow_id, create=False)
     has_meta = (out_dir / "execution_metadata.json").is_file()
     has_obls = (out_dir / "extracted_obligations.json").is_file()
     if not has_meta and not has_obls:
@@ -150,12 +182,17 @@ def load_agent1_summary(workflow_id: str) -> dict[str, Any]:
     obligations = load_extracted_obligations(workflow_id) if has_obls else {}
     comparison = load_amendment_comparison(workflow_id) if (out_dir / "amendment_comparison.json").is_file() else {}
 
+    exec_duration = meta.get("duration_seconds")
+    if exec_duration is None:
+        exec_duration = meta.get("execution_time_seconds")
+
     return {
         "workflow_id": workflow_id,
         "agent": "Agent 1 - Obligation Extraction",
         "schema_version": SCHEMA_VERSION,
         "status": meta.get("status", "completed" if obligations else "unknown"),
-        "execution_time_seconds": meta.get("execution_time_seconds", 12.4),
+        "execution_time_seconds": exec_duration,
+        "duration_seconds": exec_duration,
         "documents_processed": meta.get("documents_processed", coverage.get("documents_count", 0)),
         "document_names": meta.get("document_names", []),
         "total_pages": coverage.get("total_pages", 0),

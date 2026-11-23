@@ -125,17 +125,28 @@ def test_supporting_excerpt_not_overwritten(tmp_path):
         metadata={
             "document_id": "doc-test",
             "filename": "Amendment_2026.pdf",
-            "document_type": "circular",
+            "document_type": "amendment",
             "page": 2,
             "chunk_id": "chunk-test-1",
             "total_pages": 3,
+        },
+    )
+    baseline_doc = Document(
+        page_content="Section 2.5: Senior citizen grievances. Acknowledge in 2 days and resolve in 10 days.",
+        metadata={
+            "document_id": "doc-base",
+            "filename": "Baseline_Policy_2025.pdf",
+            "document_type": "baseline_policy",
+            "page": 1,
+            "chunk_id": "chunk-base-1",
+            "total_pages": 2,
         },
     )
 
     def fake_llm(schema, _sys, _prompt):
         return schema(obligations=[candidate])
 
-    results = circular_understanding.run([doc], llm_call=fake_llm, workflow_id="test-excerpt-workflow")
+    results = circular_understanding.run([doc, baseline_doc], llm_call=fake_llm, workflow_id="test-excerpt-workflow")
     assert len(results) == 1
     obl = results[0]
 
@@ -233,5 +244,5 @@ def test_independent_json_storage_files_and_schemas(tmp_path):
         fp = out_dir / fn
         assert fp.is_file(), f"Missing expected output file: {fn}"
         data = json.loads(fp.read_text(encoding="utf-8"))
-        assert data.get("schema_version") == "1.0.0"
+        assert data.get("schema_version") in ("1.0.0", "1.1.0")
         assert data.get("workflow_id") == wf_id or data.get("agent") == "Agent 1 - Obligation Extraction"

@@ -39,10 +39,12 @@ class Obligation(StrictModel):
     deadline_or_frequency: str = "not_specified"
     exceptions: list[str] = Field(default_factory=list)
     source: Citation
-    supporting_excerpt: str
-    confidence: float = Field(ge=0, le=1)
+    supporting_excerpt: str = ""
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    evidence_confidence: float = Field(default=0.0, ge=0, le=1)
+    model_reported_confidence: float | None = Field(default=None, ge=0, le=1)
     ambiguities: list[str] = Field(default_factory=list)
-    source_label: Literal["synthetic_demo_source"] = "synthetic_demo_source"
+    source_label: str = "synthetic_demo_source"
     status: str = "needs_review"
     change_classification: Literal[
         "NEW", "MODIFIED", "UNCHANGED", "SUPERSEDED", "POTENTIAL_CONFLICT", "NEEDS_REVIEW"
@@ -56,6 +58,33 @@ class Obligation(StrictModel):
     verification_status: Literal[
         "verified", "partially_verified", "unverified", "needs_human_review"
     ] = "verified"
+
+    # Task 4 extended fields
+    document_type: str = "circular"
+    model_quote: str | None = None
+    excerpt_char_start: int | None = None
+    excerpt_char_end: int | None = None
+    baseline_citation: Citation | None = None
+    changed_values: list[dict[str, Any]] = Field(default_factory=list)
+    review_reasons: list[str] = Field(default_factory=list)
+    extraction_method: str = "deterministic_verified"
+    baseline_available: bool = True
+
+    @property
+    def change_type(self) -> str:
+        return self.change_classification
+
+    @property
+    def source_page(self) -> int:
+        return self.page_number
+
+    @property
+    def deadline(self) -> str:
+        return self.deadline_or_frequency
+
+    @property
+    def validation_status(self) -> str:
+        return self.verification_status
 
 
 class PolicyFinding(StrictModel):

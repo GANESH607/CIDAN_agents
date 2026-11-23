@@ -37,15 +37,29 @@ def build_graph() -> Any:
             if not _state.get("workflow_id"):
                 raise ValueError("A workflow identifier is required.")
             ingest()
-            from cidan.ingestion.retrieval import retrieve_all, retrieve
-            # Retrieve all regulatory/circular passages comprehensively without rigid top-K truncation
-            docs = retrieve_all("circular")
-            if not docs:
-                docs = retrieve_all("amendment") + retrieve_all("standalone_document")
-            if not docs:
-                docs = retrieve("regulatory compliance obligations requirements", "circular", k=50)
+            from cidan.ingestion.retrieval import retrieve_all
+            # Pass ALL regulatory-type docs AND baseline/policy docs to Agent 1, tagged by role
+            reg_types = ("circular", "amendment", "standalone_document", "unknown")
+            base_types = ("policy_handbook", "baseline_policy")
+
+            all_docs = []
+            for t in reg_types:
+                for doc in retrieve_all(t):
+                    doc.metadata["role"] = "regulatory"
+                    all_docs.append(doc)
+            for t in base_types:
+                for doc in retrieve_all(t):
+                    doc.metadata["role"] = "baseline"
+                    all_docs.append(doc)
+
+            if not all_docs:
+                for doc in retrieve_all(None):
+                    dtype = doc.metadata.get("document_type", "unknown")
+                    doc.metadata["role"] = "baseline" if dtype in base_types else "regulatory"
+                    all_docs.append(doc)
+
             return {
-                "documents": docs,
+                "documents": all_docs,
                 "stage": "ingested",
                 "error": None,
             }

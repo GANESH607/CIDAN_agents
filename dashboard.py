@@ -11,6 +11,7 @@ from typing import Any
 
 import streamlit as st
 
+import sys
 from cidan.services import agent1_storage
 from cidan.services.demo_seeder import CIDAN_001_ID, seed_cidan_001_if_needed
 
@@ -20,8 +21,9 @@ def render_html(html_str: str) -> None:
     st.markdown(textwrap.dedent(html_str).strip(), unsafe_allow_html=True)
 
 
-# Ensure benchmark demo CIDAN-001 is seeded
-seed_cidan_001_if_needed()
+# Seed benchmark demo CIDAN-001 ONLY when explicitly requested via --demo-fixture flag
+if "--demo-fixture" in sys.argv:
+    seed_cidan_001_if_needed(demo_fixture_enabled=True)
 
 # Page configuration
 st.set_page_config(
@@ -727,7 +729,7 @@ else:
             </div>
             <div style="display: flex; align-items: center; gap: 12px;">
                 <span class="badge-pill badge-completed">✓ Completed</span>
-                <span style="font-size: 13px; color: #94A3B8;">Execution time {summary.get('execution_time_seconds', 12.4)} s</span>
+                <span style="font-size: 13px; color: #94A3B8;">Execution time {summary.get('execution_time_seconds') or summary.get('duration_seconds') or 'N/A'} s</span>
             </div>
         </div>
         """,

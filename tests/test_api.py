@@ -22,7 +22,9 @@ def make_pdf(text):
     return content
 
 
-def test_health_does_not_expose_api_key():
+def test_health_does_not_expose_api_key(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-secret")
+    monkeypatch.setenv("CIDAN_ACCESS_TOKEN", "test-access-token")
     response = client.get("/health")
     assert response.status_code == 200
     assert "test-secret" not in response.text
@@ -123,7 +125,9 @@ def test_approval_request_validation():
     assert response.status_code == 422
 
 
-def test_agent1_endpoints_return_stored_results():
+def test_agent1_endpoints_return_stored_results(tmp_path, monkeypatch):
+    import cidan.services.agent1_storage as storage
+    monkeypatch.setattr(storage, "WORKFLOW_OUTPUTS_DIR", tmp_path / "workflow_outputs")
     from cidan.services.demo_seeder import seed_cidan_001_if_needed
     seed_cidan_001_if_needed(force=True)
 
@@ -170,7 +174,9 @@ def test_agent1_endpoints_return_stored_results():
     assert met_data["quality_checks"]["extraction_quality_score"] == 94.0
 
 
-def test_agent1_endpoints_404_on_missing_workflow():
+def test_agent1_endpoints_404_on_missing_workflow(tmp_path, monkeypatch):
+    import cidan.services.agent1_storage as storage
+    monkeypatch.setattr(storage, "WORKFLOW_OUTPUTS_DIR", tmp_path / "workflow_outputs")
     res = client.get("/workflows/nonexistent-workflow-999/agents/obligation-extraction")
     assert res.status_code == 404
 

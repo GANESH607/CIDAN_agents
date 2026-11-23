@@ -1,0 +1,26 @@
+{
+  "fixture_name": "table_heavy.pdf",
+  "baseline_fixture": null,
+  "expected_obligations": [
+    {
+      "clause_id": "2.1",
+      "key_phrase": "Tier 1: Above 50,00,000 INR | 15% liquid assets",
+      "expected_change_type": "NEW",
+      "expected_numeric_values": [
+        5000000,
+        15
+      ],
+      "expected_page": 1
+    },
+    {
+      "clause_id": "2.2",
+      "key_phrase": "Tier 2: Above 10,00,000 INR | 10% liquid assets",
+      "expected_change_type": "NEW",
+      "expected_numeric_values": [
+        1000000,
+        10
+      ],
+      "expected_page": 1
+    }
+  ]
+}

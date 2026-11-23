@@ -1,0 +1,47 @@
+{
+  "fixture_name": "amendment_policy.pdf",
+  "baseline_fixture": "baseline_policy.pdf",
+  "expected_obligations": [
+    {
+      "clause_id": "1.1",
+      "key_phrase": "Customer onboarding identity verification within 3 working days",
+      "expected_change_type": "UNCHANGED",
+      "expected_numeric_values": [
+        3
+      ],
+      "expected_page": 1
+    },
+    {
+      "clause_id": "2.1",
+      "key_phrase": "Transaction monitoring threshold is 250,000 INR",
+      "expected_change_type": "MODIFIED",
+      "expected_numeric_values": [
+        250000
+      ],
+      "expected_page": 1
+    },
+    {
+      "clause_id": "3.1",
+      "key_phrase": "deleted, omitted, and superseded",
+      "expected_change_type": "SUPERSEDED",
+      "expected_numeric_values": [],
+      "expected_page": 1
+    },
+    {
+      "clause_id": "5.1",
+      "key_phrase": "Automated suspicious activity alerting within 2 hours",
+      "expected_change_type": "NEW",
+      "expected_numeric_values": [
+        2
+      ],
+      "expected_page": 1
+    },
+    {
+      "clause_id": "6.1",
+      "key_phrase": "Semi-annual compliance audit required",
+      "expected_change_type": "MODIFIED",
+      "expected_numeric_values": [],
+      "expected_page": 1
+    }
+  ]
+}

@@ -1,13 +1,18 @@
 """Seeds the benchmark demonstration workflow CIDAN-001 matching the Jatayu design."""
 
+import os
+import sys
 from datetime import datetime, timezone
 from cidan.services import agent1_storage
 
 CIDAN_001_ID = "CIDAN-001"
 
 
-def seed_cidan_001_if_needed(force: bool = False) -> None:
-    out_dir = agent1_storage.get_agent1_output_dir(CIDAN_001_ID)
+def seed_cidan_001_if_needed(force: bool = False, demo_fixture_enabled: bool = False) -> None:
+    if not force and not demo_fixture_enabled and "--demo-fixture" not in sys.argv and not os.getenv("CIDAN_DEMO_FIXTURE"):
+        return
+
+    out_dir = agent1_storage.get_agent1_output_dir(CIDAN_001_ID, create=True)
     if not force and (out_dir / "extracted_obligations.json").is_file():
         return
 
@@ -399,6 +404,14 @@ def seed_cidan_001_if_needed(force: bool = False) -> None:
         "total_obligations": 6,
         "change_breakdown": {"new": 3, "modified": 3, "unchanged": 0},
     }
+
+    for o in obligations:
+        o["synthetic_fixture"] = True
+    comparison["synthetic_fixture"] = True
+    for e in evidence:
+        e["synthetic_fixture"] = True
+    coverage["synthetic_fixture"] = True
+    metadata["synthetic_fixture"] = True
 
     agent1_storage.save_extracted_obligations(CIDAN_001_ID, obligations)
     agent1_storage.save_amendment_comparison(CIDAN_001_ID, comparison)
