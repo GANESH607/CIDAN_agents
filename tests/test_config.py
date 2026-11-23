@@ -21,3 +21,13 @@ def test_llm_max_output_tokens_rejects_invalid_values(monkeypatch, value):
 
     with pytest.raises(ValueError, match="positive integer"):
         get_settings()
+
+
+def test_sandbox_output_tokens_use_separate_validated_budget(monkeypatch):
+    monkeypatch.delenv("SANDBOX_LLM_MAX_OUTPUT_TOKENS", raising=False)
+    assert get_settings().sandbox_llm_max_output_tokens == 1200
+    monkeypatch.setenv("SANDBOX_LLM_MAX_OUTPUT_TOKENS", "1800")
+    assert get_settings().sandbox_llm_max_output_tokens == 1800
+    monkeypatch.setenv("SANDBOX_LLM_MAX_OUTPUT_TOKENS", "0")
+    with pytest.raises(ValueError, match="positive integer"):
+        get_settings()

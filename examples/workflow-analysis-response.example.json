@@ -1,0 +1,156 @@
+{
+  "workflow_id": "7d19481b-2d2b-4bb4-96b8-35eaf0693df1",
+  "stage": "awaiting_human_review",
+  "error": null,
+  "obligations": [
+    {
+      "obligation_id": "OBL-001",
+      "clause_id": "not_specified",
+      "text": "Apply the illustrative control framework to the described loan applications.",
+      "applicability": "Synthetic demo applications described in the circular.",
+      "product_type": "personal loan",
+      "amount_threshold": null,
+      "currency": null,
+      "effective_date": "not_specified",
+      "responsible_function": "bank",
+      "required_action": "Apply the illustrative control framework.",
+      "deadline_or_frequency": "not_specified",
+      "exceptions": [],
+      "source": {
+        "document_id": "44b779e11de57f3100f206973232b84cf4c35534457b9b52948f5154ecdf87e7",
+        "filename": "CIDAN_Synthetic_RBI_Style_Loan_Approval_Circular_8_pages.pdf",
+        "document_type": "circular",
+        "page": 3,
+        "excerpt": "Applies in this fictional scenario to new personal-loan and consumer-credit applications.",
+        "chunk_id": "5a7176c897136cf1ca2162d383225feda2d521c537b161ce3716f17fc49c05c2"
+      },
+      "supporting_excerpt": "Applies in this fictional scenario to new personal-loan and consumer-credit applications.",
+      "confidence": 0.8,
+      "ambiguities": [
+        "Illustrative source language requires human confirmation."
+      ],
+      "source_label": "synthetic_demo_source",
+      "status": "needs_review"
+    }
+  ],
+  "findings": [
+    {
+      "obligation_id": "OBL-001",
+      "status": "requires_human_review",
+      "matching_policy_provision": null,
+      "circular_citation": {
+        "document_id": "44b779e11de57f3100f206973232b84cf4c35534457b9b52948f5154ecdf87e7",
+        "filename": "CIDAN_Synthetic_RBI_Style_Loan_Approval_Circular_8_pages.pdf",
+        "document_type": "circular",
+        "page": 3,
+        "excerpt": "Applies in this fictional scenario to new personal-loan and consumer-credit applications.",
+        "chunk_id": "5a7176c897136cf1ca2162d383225feda2d521c537b161ce3716f17fc49c05c2"
+      },
+      "policy_citations": [],
+      "reasoning": "The retrieved handbook evidence is insufficient to confirm policy coverage.",
+      "missing_or_inconsistent": "Coverage cannot be determined from the retrieved passages.",
+      "operational_impact": "A reviewer should check the full handbook before drawing conclusions.",
+      "recommended_action": "Review the cited circular and relevant handbook sections.",
+      "confidence": 0.4,
+      "evidence_limitations": [
+        "The finding is based on retrieved passages, not a complete legal review."
+      ]
+    }
+  ],
+  "proposals": [],
+  "tests": [],
+  "report": {
+    "report_id": "CIDAN-20261026105955000000",
+    "generated_at_utc": "2026-10-26T05:29:55.000000+00:00",
+    "source_status": "synthetic_demo_source",
+    "disclaimer": "Synthetic demo only; not an official RBI circular or legal advice.",
+    "narrative": {
+      "executive_summary": "Extracted 1 obligations and generated 1 policy findings. 0 draft rules were generated; 0 of 0 synthetic tests passed.",
+      "operational_impact": "1 policy findings require or recommend human review. This report does not determine legal compliance or production readiness.",
+      "recommended_human_review_actions": [
+        "Review the cited circular and relevant handbook sections."
+      ],
+      "evidence_limitations": [
+        "The finding is based on retrieved passages, not a complete legal review.",
+        "Illustrative source language requires human confirmation."
+      ],
+      "deployment_readiness_assessment": "Not assessed for production deployment; human review is required."
+    },
+    "metrics": {
+      "obligations_extracted": 1,
+      "policy_findings": 1,
+      "policy_mapping_status_counts": {
+        "requires_human_review": 1
+      },
+      "draft_rules_generated": 0,
+      "tests_total": 0,
+      "tests_passed": 0,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "tests_invalid": 0,
+      "test_pass_rate": null
+    },
+    "obligations": [
+      {
+        "obligation_id": "OBL-001",
+        "clause_id": "not_specified",
+        "text": "Apply the illustrative control framework to the described loan applications.",
+        "applicability": "Synthetic demo applications described in the circular.",
+        "product_type": "personal loan",
+        "amount_threshold": null,
+        "currency": null,
+        "effective_date": "not_specified",
+        "responsible_function": "bank",
+        "required_action": "Apply the illustrative control framework.",
+        "deadline_or_frequency": "not_specified",
+        "exceptions": [],
+        "source": {
+          "document_id": "44b779e11de57f3100f206973232b84cf4c35534457b9b52948f5154ecdf87e7",
+          "filename": "CIDAN_Synthetic_RBI_Style_Loan_Approval_Circular_8_pages.pdf",
+          "document_type": "circular",
+          "page": 3,
+          "excerpt": "Applies in this fictional scenario to new personal-loan and consumer-credit applications.",
+          "chunk_id": "5a7176c897136cf1ca2162d383225feda2d521c537b161ce3716f17fc49c05c2"
+        },
+        "supporting_excerpt": "Applies in this fictional scenario to new personal-loan and consumer-credit applications.",
+        "confidence": 0.8,
+        "ambiguities": [
+          "Illustrative source language requires human confirmation."
+        ],
+        "source_label": "synthetic_demo_source",
+        "status": "needs_review"
+      }
+    ],
+    "policy_findings": [
+      {
+        "obligation_id": "OBL-001",
+        "status": "requires_human_review",
+        "matching_policy_provision": null,
+        "circular_citation": {
+          "document_id": "44b779e11de57f3100f206973232b84cf4c35534457b9b52948f5154ecdf87e7",
+          "filename": "CIDAN_Synthetic_RBI_Style_Loan_Approval_Circular_8_pages.pdf",
+          "document_type": "circular",
+          "page": 3,
+          "excerpt": "Applies in this fictional scenario to new personal-loan and consumer-credit applications.",
+          "chunk_id": "5a7176c897136cf1ca2162d383225feda2d521c537b161ce3716f17fc49c05c2"
+        },
+        "policy_citations": [],
+        "reasoning": "The retrieved handbook evidence is insufficient to confirm policy coverage.",
+        "missing_or_inconsistent": "Coverage cannot be determined from the retrieved passages.",
+        "operational_impact": "A reviewer should check the full handbook before drawing conclusions.",
+        "recommended_action": "Review the cited circular and relevant handbook sections.",
+        "confidence": 0.4,
+        "evidence_limitations": [
+          "The finding is based on retrieved passages, not a complete legal review."
+        ]
+      }
+    ],
+    "proposed_rules": [],
+    "tests": [],
+    "approval_required": true
+  },
+  "report_files": {
+    "json": "/var/data/outputs/reports/7d19481b-2d2b-4bb4-96b8-35eaf0693df1/validation_report.json",
+    "markdown": "/var/data/outputs/reports/7d19481b-2d2b-4bb4-96b8-35eaf0693df1/validation_report.md"
+  }
+}

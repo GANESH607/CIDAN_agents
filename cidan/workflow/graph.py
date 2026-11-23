@@ -37,11 +37,15 @@ def build_graph() -> Any:
             if not _state.get("workflow_id"):
                 raise ValueError("A workflow identifier is required.")
             ingest()
+            from cidan.ingestion.retrieval import retrieve_all, retrieve
+            # Retrieve all regulatory/circular passages comprehensively without rigid top-K truncation
+            docs = retrieve_all("circular")
+            if not docs:
+                docs = retrieve_all("amendment") + retrieve_all("standalone_document")
+            if not docs:
+                docs = retrieve("regulatory compliance obligations requirements", "circular", k=50)
             return {
-                "documents": retrieve(
-                    "loan approval requirements, obligations, scope, thresholds, actions",
-                    "circular", k=16,
-                ),
+                "documents": docs,
                 "stage": "ingested",
                 "error": None,
             }
@@ -50,7 +54,10 @@ def build_graph() -> Any:
 
     def understand_node(state: WorkflowState) -> dict:
         try:
-            results = circular_understanding.run(state["documents"])
+            results = circular_understanding.run(
+                state["documents"],
+                workflow_id=state.get("workflow_id"),
+            )
             return {"obligations": [item.model_dump(mode="json") for item in results], "stage": "understood"}
         except Exception as exc:
             return failure("circular_understanding", exc)
@@ -83,19 +90,31 @@ def build_graph() -> Any:
     def test_node(state: WorkflowState) -> dict:
         try:
             from cidan.models import RuleProposal
-
-            summaries = [
-                testing_validation.run(RuleProposal.model_validate(proposal))
-                for proposal in state["proposals"]
-            ]
             tested = []
-            for proposal, summary in zip(state["proposals"], summaries):
-                updated = dict(proposal)
-                updated["status"] = "validated" if summary.failed == 0 and summary.invalid == 0 else "draft"
+            summaries = []
+            sandbox_suites = []
+            for proposal_data in state["proposals"]:
+                proposal_model = RuleProposal.model_validate(proposal_data)
+                summary = testing_validation.run(proposal_model)
+                summaries.append(summary)
+                updated = dict(proposal_data)
+                updated["status"] = (
+                    "validated"
+                    if summary.total == 50
+                    and summary.failed == 0
+                    and summary.invalid == 0
+                    and summary.pending == 0
+                    else "draft"
+                )
                 tested.append(updated)
+                if summary.sandbox_suite_id:
+                    from cidan.sandbox.service import get_suite
+
+                    sandbox_suites.append(get_suite(summary.sandbox_suite_id))
             return {
                 "proposals": tested,
                 "tests": [item.model_dump(mode="json") for item in summaries],
+                "sandbox_suites": sandbox_suites,
                 "stage": "tested",
             }
         except Exception as exc:
@@ -110,6 +129,7 @@ def build_graph() -> Any:
                 [PolicyFinding.model_validate(item) for item in state["findings"]],
                 [RuleProposal.model_validate(item) for item in state["proposals"]],
                 [TestSummary.model_validate(item) for item in state["tests"]],
+                state.get("sandbox_suites", []),
             )
             return {"report": report_data, "stage": "awaiting_human_review"}
         except Exception as exc:

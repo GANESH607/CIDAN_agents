@@ -121,3 +121,56 @@ def test_upload_rejects_non_pdf_content_without_replacing_source(tmp_path, monke
 def test_approval_request_validation():
     response = client.post("/rules/not-found/approve", json={"reviewer_id": ""})
     assert response.status_code == 422
+
+
+def test_agent1_endpoints_return_stored_results():
+    from cidan.services.demo_seeder import seed_cidan_001_if_needed
+    seed_cidan_001_if_needed(force=True)
+
+    # 1. Overview
+    res = client.get("/workflows/CIDAN-001/agents/obligation-extraction")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["workflow_id"] == "CIDAN-001"
+    assert data["obligations_extracted"] == 6
+    assert data["coverage_percentage"] == 100.0
+    assert data["change_analysis"]["modified"] == 3
+    assert data["change_analysis"]["new"] == 3
+
+    # 2. Obligations
+    res_obls = client.get("/workflows/CIDAN-001/agents/obligation-extraction/obligations")
+    assert res_obls.status_code == 200
+    obls_data = res_obls.json()
+    assert len(obls_data["obligations"]) == 6
+    assert obls_data["obligations"][0]["obligation_id"] == "OBL-001"
+    assert obls_data["obligations"][0]["clause_id"] == "2.1"
+    assert obls_data["obligations"][0]["change_classification"] == "MODIFIED"
+
+    # 3. Comparison
+    res_comp = client.get("/workflows/CIDAN-001/agents/obligation-extraction/comparison")
+    assert res_comp.status_code == 200
+    comp_data = res_comp.json()
+    assert comp_data["summary"]["modified"] == 3
+    assert comp_data["summary"]["new"] == 3
+    assert len(comp_data["comparison_items"]) == 6
+
+    # 4. Evidence
+    res_evi = client.get("/workflows/CIDAN-001/agents/obligation-extraction/evidence")
+    assert res_evi.status_code == 200
+    evi_data = res_evi.json()
+    assert evi_data["total_citations"] == 6
+    assert evi_data["evidence"][0]["exact_supporting_excerpt"]
+
+    # 5. Metrics
+    res_met = client.get("/workflows/CIDAN-001/agents/obligation-extraction/metrics")
+    assert res_met.status_code == 200
+    met_data = res_met.json()
+    assert met_data["coverage_percentage"] == 100.0
+    assert met_data["quality_checks"]["all_pages_processed"] is True
+    assert met_data["quality_checks"]["extraction_quality_score"] == 94.0
+
+
+def test_agent1_endpoints_404_on_missing_workflow():
+    res = client.get("/workflows/nonexistent-workflow-999/agents/obligation-extraction")
+    assert res.status_code == 404
+

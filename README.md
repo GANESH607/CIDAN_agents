@@ -121,6 +121,12 @@ truncate structured responses and cause workflow validation errors. Set `LLM_MOD
 and `EMBEDDING_MODEL` as needed. The container listens on Render's `PORT` environment
 variable.
 
+Sandbox test generation uses the same Groq key and model with a separate
+`SANDBOX_LLM_MAX_OUTPUT_TOKENS` budget (default `1200`) so structured case batches fit
+the output schema. Set a lower value if required by the Groq account limits; a
+truncated or malformed response fails generation rather than creating placeholder
+cases.
+
 To allow authorized testers to upload their own PDF pair and preserve the uploaded
 PDFs, Chroma index, workflow records, audit log, and reports across restarts, attach
 a Render persistent disk mounted at `/var/data` and set:
@@ -159,6 +165,70 @@ bearer-token authentication; use Swagger's **Authorize** button. Main endpoints:
 - `GET /rules` and `GET /rules/{rule_id}` — proposal status and evidence.
 - `POST /rules/{rule_id}/approve` — requires a reviewer identifier and successful tests.
 - `POST /rules/{rule_id}/export-preview` — requires explicit local approval.
+- `POST /sandbox/suites` — generate a Groq-backed, 50-case comparison suite from
+  evidence-backed baseline/proposed rules and known unrelated products.
+- `GET /sandbox/suites`, `GET /sandbox/suites/{suite_id}` — list suites and inspect
+  category totals, cases, actual/expected outputs, and regression results.
+- `POST /sandbox/suites/{suite_id}/execute` — deterministically evaluate both rule
+  versions and persist execution and regression results.
+- `GET /sandbox/suites/{suite_id}/history` — view generation and execution history.
+
+For the document-driven workflow, run `POST /ingest` and then
+`POST /workflows/analyze`. The workflow extracts circular obligations with source
+citations, maps them to retrieved handbook passages, and only sends evidence-backed
+baseline/proposed rules to sandbox generation. Inspect the returned `proposals` and
+`sandbox_suites`, or fetch them later from `GET /workflows/{workflow_id}`. Proposals
+without a deterministic baseline or sufficient document evidence remain pending manual
+review and do not get fabricated test suites. `POST /sandbox/suites` is a separate
+manual API for callers that supply rules directly; a suite created that way does not,
+by itself, prove rules were extracted from either PDF.
+
+For a manual age-threshold demo, start the API and open `http://127.0.0.1:8000/docs`.
+Set `CIDAN_ACCESS_TOKEN` in the API process environment, then authorize Swagger with
+that bearer token. Submit this body to `POST /sandbox/suites`:
+
+```json
+{
+  "document_id": "hypothetical-age-threshold-demo",
+  "change_id": "hypothetical-age-threshold-60-to-70",
+  "baseline_rule": {
+    "rule_id": "hypothetical-age-threshold",
+    "version": 1,
+    "change_id": "hypothetical-age-threshold-v1",
+    "product_type": "personal_loan",
+    "conditions": [{"field": "customer_age", "operator": "gte", "value": 60}],
+    "outcome_when_matched": "ELIGIBLE",
+    "outcome_when_unmatched": "NOT_ELIGIBLE"
+  },
+  "proposed_rule": {
+    "rule_id": "hypothetical-age-threshold",
+    "version": 2,
+    "change_id": "hypothetical-age-threshold-60-to-70",
+    "product_type": "personal_loan",
+    "conditions": [{"field": "customer_age", "operator": "gte", "value": 70}],
+    "outcome_when_matched": "ELIGIBLE",
+    "outcome_when_unmatched": "NOT_ELIGIBLE"
+  },
+  "unrelated_product_types": ["credit_card", "home_loan"]
+}
+```
+
+The response includes the generated `suite_id` and case counts. Use
+`GET /sandbox/suites/{suite_id}` to inspect the 50 cases and category distribution,
+then `POST /sandbox/suites/{suite_id}/execute` and GET the suite again to see actual
+old/proposed outputs, pass/fail/pending counts, and regression results. The same
+records are stored in `outputs/sandbox.sqlite3`. This is a hypothetical engine demo,
+not a rule extracted from the supplied handbook.
+
+Sandbox suites, cases, per-version rule executions, comparisons, regressions, and
+history are stored in `outputs/sandbox.sqlite3`. The SQLite schema is created
+idempotently and does not replace existing workflow JSON or audit data. Generation
+uses the configured Groq model in small batches; a failed/invalid response leaves a
+failed suite record and never fills in fabricated cases. A proposal without an
+evidence-backed deterministic baseline, proposed rule, or unrelated product evidence
+is recorded for manual review instead of being executed. Rule approval requires a
+completed 50-case suite with all comparisons and regression checks passing, followed
+by an explicit human review. Sandbox execution cannot deploy or activate a rule.
 
 When the server is running, `Invoke-RestMethod http://127.0.0.1:8000/health` reports
 configuration state without returning credentials. Use Swagger's **Authorize** button
@@ -212,6 +282,8 @@ Remove-Item Env:CIDAN_RUN_LLM_INTEGRATION
   and cited retrieval.
 - `cidan/agents/` — obligation extraction, semantic mapping, rule proposals, synthetic
   tests, and deterministic impact reporting.
+- `cidan/sandbox/` — structured rule evaluation, Groq test generation, case validation,
+  old/new comparison, regression checks, SQLite persistence, and result reporting.
 - `cidan/workflow/` — typed LangGraph state, execution, and local persistence.
 - `cidan/rule_engine.py` — allowlisted schema validation and deterministic interpreter.
 - `cidan/services/` — workflow execution, approval and export preview controls.

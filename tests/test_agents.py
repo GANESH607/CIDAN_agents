@@ -8,7 +8,6 @@ from cidan.models import (
     Obligation,
     PolicyFinding,
     RuleProposal,
-    SyntheticTestCase,
 )
 
 
@@ -88,6 +87,26 @@ def test_circular_agent_accepts_only_exact_source_evidence():
     result = circular_understanding.run(docs, llm_call=fake_llm)
     assert result[0].source_label == "synthetic_demo_source"
     assert result[0].effective_date == "not_specified"
+
+
+def test_circular_agent_allows_passages_without_obligations():
+    document = Document(
+        page_content="This page contains only an illustrative heading and disclaimer.",
+        metadata={
+            "document_id": "source-doc",
+            "filename": "CIDAN_Synthetic_Loan_Circular.pdf",
+            "document_type": "circular",
+            "page": 1,
+            "chunk_id": "no-obligation-chunk",
+        },
+    )
+
+    result = circular_understanding.run(
+        [document],
+        llm_call=lambda schema, _system, _prompt: schema(obligations=[]),
+    )
+
+    assert result == []
 
 
 def test_circular_agent_uses_exact_chunk_citation_for_nonverbatim_excerpt():
@@ -371,7 +390,12 @@ def test_rule_authoring_rejects_citations_from_unlinked_obligations():
         )
 
 
-def test_testing_agent_executes_llm_proposed_synthetic_cases():
+def test_testing_agent_requires_evidence_backed_baseline_before_generation(
+    tmp_path, monkeypatch
+):
+    from cidan.sandbox.repository import load_suite
+
+    monkeypatch.setenv("OUTPUTS_DIRECTORY", str(tmp_path))
     obligation = make_obligation()
     rule = RuleProposal(
         rule_id="RULE-1",
@@ -387,22 +411,13 @@ def test_testing_agent_executes_llm_proposed_synthetic_cases():
         supporting_citations=[obligation.source],
         action="second_review",
     )
-    cases = [
-        SyntheticTestCase(
-            test_id=f"boundary-{amount}",
-            inputs={"transaction_id": f"tx-{amount}", "amount": amount},
-            expected_result=amount > 80_000,
-            reason="Verify synthetic threshold boundary.",
-            source_obligation_id=obligation.obligation_id,
-            category="threshold_boundary",
-        )
-        for amount in (79_999, 80_000, 80_001)
-    ]
-
-    def fake_llm(schema, system, prompt):
-        assert "synthetic" in system
-        assert rule.rule_id in prompt
-        return schema(cases=cases)
-
-    summary = validate_rule_tests(rule, llm_call=fake_llm)
-    assert (summary.total, summary.passed, summary.failed, summary.invalid) == (3, 3, 0, 0)
+    summary = validate_rule_tests(
+        rule,
+        llm_call=lambda *_args: pytest.fail("Groq must not run without a baseline."),
+    )
+    assert summary.total == 0
+    assert summary.pending == 1
+    assert summary.sandbox_suite_id
+    suite = load_suite(summary.sandbox_suite_id)
+    assert suite["status"] == "manual_review"
+    assert not suite["test_cases"]

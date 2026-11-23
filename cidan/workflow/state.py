@@ -14,4 +14,5 @@ class WorkflowState(TypedDict, total=False):
     findings: list[dict[str, Any]]
     proposals: list[dict[str, Any]]
     tests: list[dict[str, Any]]
+    sandbox_suites: list[dict[str, Any]]
     report: dict[str, Any]

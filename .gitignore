@@ -10,3 +10,6 @@ outputs/
 *.db
 *.log
 .coverage
+*.zip
+workflow_outputs/
+

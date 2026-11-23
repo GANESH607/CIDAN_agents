@@ -58,6 +58,7 @@ def run(
     findings: list[PolicyFinding],
     proposals: list[RuleProposal],
     tests: list[TestSummary],
+    sandbox_suites: list[dict[str, Any]] | None = None,
 ) -> dict:
     status_counts: dict[str, int] = {}
     for finding in findings:
@@ -72,6 +73,7 @@ def run(
         "tests_failed": sum(item.failed for item in tests),
         "tests_skipped": sum(item.skipped for item in tests),
         "tests_invalid": sum(item.invalid for item in tests),
+        "tests_pending": sum(item.pending for item in tests),
     }
     total = int(metrics["tests_total"])
     metrics["test_pass_rate"] = int(metrics["tests_passed"]) / total if total else None
@@ -86,6 +88,7 @@ def run(
         "policy_findings": [item.model_dump(mode="json") for item in findings],
         "proposed_rules": [item.model_dump(mode="json") for item in proposals],
         "tests": [item.model_dump(mode="json") for item in tests],
+        "sandbox_suites": sandbox_suites or [],
         "approval_required": True,
     }
 
@@ -154,6 +157,7 @@ def render_markdown(report: dict) -> str:
         f"- Total: {metrics['tests_total']}",
         f"- Passed: {metrics['tests_passed']}",
         f"- Failed: {metrics['tests_failed']}",
+        f"- Pending: {metrics['tests_pending']}",
         f"- Invalid: {metrics['tests_invalid']}",
         f"- Skipped: {metrics['tests_skipped']}",
         f"- Pass rate: {metrics['test_pass_rate']}",

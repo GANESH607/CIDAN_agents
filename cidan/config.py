@@ -21,6 +21,7 @@ class Settings:
     max_pdf_bytes: int = 25 * 1024 * 1024
     llm_timeout_seconds: float = 60
     llm_max_output_tokens: int = 400
+    sandbox_llm_max_output_tokens: int = 1200
 
     @property
     def llm_configured(self) -> bool:
@@ -37,6 +38,18 @@ def get_settings() -> Settings:
         raise ValueError("LLM_MAX_OUTPUT_TOKENS must be a positive integer.") from exc
     if llm_max_output_tokens < 1:
         raise ValueError("LLM_MAX_OUTPUT_TOKENS must be a positive integer.")
+    try:
+        sandbox_llm_max_output_tokens = int(
+            os.getenv("SANDBOX_LLM_MAX_OUTPUT_TOKENS", "1200")
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "SANDBOX_LLM_MAX_OUTPUT_TOKENS must be a positive integer."
+        ) from exc
+    if sandbox_llm_max_output_tokens < 1:
+        raise ValueError(
+            "SANDBOX_LLM_MAX_OUTPUT_TOKENS must be a positive integer."
+        )
     source_dir = source_dir if source_dir.is_absolute() else ROOT / source_dir
     chroma_dir = chroma_dir if chroma_dir.is_absolute() else ROOT / chroma_dir
     outputs_dir = outputs_dir if outputs_dir.is_absolute() else ROOT / outputs_dir
@@ -50,6 +63,7 @@ def get_settings() -> Settings:
         source_pdf_directory=source_dir,
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         llm_max_output_tokens=llm_max_output_tokens,
+        sandbox_llm_max_output_tokens=sandbox_llm_max_output_tokens,
     )
 
 

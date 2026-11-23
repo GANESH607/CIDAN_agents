@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from cidan.config import ConfigurationError, get_settings
 from cidan.agents.reporting import render_markdown
@@ -15,6 +15,8 @@ from cidan.ingestion.pdf_loader import classify_document, find_pdfs, ingestion_s
 from cidan.ingestion.vector_store import ingest
 from cidan.services.approval_service import approve_rule, export_preview
 from cidan.services.workflow_service import execute_workflow
+from cidan.sandbox.schemas import SandboxRule
+from cidan.sandbox import service as sandbox_service
 from cidan.workflow.persistence import load_workflow, list_workflows
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,16 @@ class ApprovalRequest(BaseModel):
     note: str = Field(default="", max_length=2000)
 
 
+class SandboxSuiteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str = Field(min_length=1, max_length=256)
+    change_id: str = Field(min_length=1, max_length=128)
+    baseline_rule: SandboxRule
+    proposed_rule: SandboxRule
+    unrelated_product_types: list[str] = Field(min_length=1)
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     settings = get_settings()
@@ -66,6 +78,7 @@ def health() -> dict[str, Any]:
         "llm_provider": "groq",
         "llm_model": settings.llm_model,
         "llm_max_output_tokens": settings.llm_max_output_tokens,
+        "sandbox_llm_max_output_tokens": settings.sandbox_llm_max_output_tokens,
         "embedding_model": settings.embedding_model,
         "embedding_provider": "fastembed_local",
         "source_directory": str(settings.source_pdf_directory),
@@ -288,3 +301,148 @@ def preview_export(rule_id: str, _: None = Depends(require_access_token)) -> dic
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/sandbox/suites", status_code=201)
+def create_sandbox_suite(
+    request: SandboxSuiteRequest,
+    _: None = Depends(require_access_token),
+) -> dict[str, Any]:
+    if request.change_id != request.proposed_rule.change_id:
+        raise HTTPException(
+            status_code=422,
+            detail="change_id must match the proposed rule's change_id.",
+        )
+    try:
+        return sandbox_service.generate_suite(
+            document_id=request.document_id,
+            change_id=request.change_id,
+            baseline_rule=request.baseline_rule,
+            proposed_rule=request.proposed_rule,
+            unrelated_product_types=request.unrelated_product_types,
+        )
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Sandbox test generation failed")
+        raise HTTPException(
+            status_code=502,
+            detail="Test generation failed; no successful suite was created.",
+        ) from exc
+
+
+@app.get("/sandbox/suites")
+def sandbox_suites(_: None = Depends(require_access_token)) -> list[dict[str, Any]]:
+    return sandbox_service.list_suites()
+
+
+@app.get("/sandbox/suites/{suite_id}")
+def sandbox_suite(
+    suite_id: str,
+    _: None = Depends(require_access_token),
+) -> dict[str, Any]:
+    try:
+        return sandbox_service.get_suite(suite_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/sandbox/suites/{suite_id}/execute")
+def execute_sandbox_suite(
+    suite_id: str,
+    _: None = Depends(require_access_token),
+) -> dict[str, Any]:
+    try:
+        return sandbox_service.run_suite(suite_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/sandbox/suites/{suite_id}/history")
+def sandbox_suite_history(
+    suite_id: str,
+    _: None = Depends(require_access_token),
+) -> list[dict[str, Any]]:
+    try:
+        return sandbox_service.get_history(suite_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Agent 1 — Obligation Extraction Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/workflows/{id}/agents/obligation-extraction")
+def get_agent1_overview(
+    id: str,
+    _: None = Depends(require_access_token),
+) -> dict[str, Any]:
+    from cidan.services import agent1_storage
+    try:
+        return agent1_storage.load_agent1_summary(id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/workflows/{id}/agents/obligation-extraction/obligations")
+def get_agent1_obligations(
+    id: str,
+    _: None = Depends(require_access_token),
+) -> dict[str, Any]:
+    from cidan.services import agent1_storage
+    try:
+        return agent1_storage.load_extracted_obligations(id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/workflows/{id}/agents/obligation-extraction/comparison")
+def get_agent1_comparison(
+    id: str,
+    _: None = Depends(require_access_token),
+) -> dict[str, Any]:
+    from cidan.services import agent1_storage
+    try:
+        return agent1_storage.load_amendment_comparison(id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/workflows/{id}/agents/obligation-extraction/evidence")
+def get_agent1_evidence(
+    id: str,
+    _: None = Depends(require_access_token),
+) -> dict[str, Any]:
+    from cidan.services import agent1_storage
+    try:
+        return agent1_storage.load_evidence_and_citations(id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/workflows/{id}/agents/obligation-extraction/metrics")
+def get_agent1_metrics(
+    id: str,
+    _: None = Depends(require_access_token),
+) -> dict[str, Any]:
+    from cidan.services import agent1_storage
+    try:
+        return agent1_storage.load_coverage_report(id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+

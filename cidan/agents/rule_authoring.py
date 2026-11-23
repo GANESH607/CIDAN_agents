@@ -12,7 +12,18 @@ SYSTEM = """Draft constrained declarative proposals only for evidence-supported
 partially covered or conflicting findings. Use only allowlisted fields/operators.
 Never emit executable code, shell, SQL, or arbitrary expressions. Every proposal starts
 as draft and cites source evidence. The circular is synthetic, not legally binding.
-Do not invent an effective date."""
+Do not invent an effective date.
+
+For sandbox validation, include both baseline_rule and sandbox_rule only when the cited
+handbook and circular explicitly support deterministic conditions, product scope, and
+outcomes. They must use the same rule_id and product_type, and different versions.
+Set change_id to the ID of this proposed change and use it in sandbox_rule.change_id.
+Use only fields present in the policy evidence and operators gt, gte, lt, lte, eq, ne,
+or between. If the baseline cannot be deterministically represented, leave both rules
+null and record the reason in unresolved_questions. Include unrelated_product_types
+only when those products are evidenced by the supplied policy citations; do not invent
+product categories. A rule without a complete baseline, proposed rule, and unrelated
+product evidence must remain for manual review."""
 
 
 def run(

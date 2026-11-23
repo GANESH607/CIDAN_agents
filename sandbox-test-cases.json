@@ -1,0 +1,9 @@
+[
+  {
+    "id": "TC_01",
+    "endpoint": "/your/documented/test/endpoint",
+    "method": "POST",
+    "payload": {},
+    "expected_status": 200
+  }
+]

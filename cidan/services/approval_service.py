@@ -1,7 +1,35 @@
 from datetime import datetime, timezone
 
 from cidan.models import ApprovalRecord
+from cidan.sandbox import repository as sandbox_repository
+from cidan.sandbox.service import get_suite
 from cidan.workflow.persistence import audit, list_workflows, save_workflow
+
+
+def _require_successful_sandbox(
+    rule_id: str,
+    change_id: str | None,
+    version: int,
+) -> None:
+    if not change_id:
+        raise ValueError("Rule approval requires a traceable proposed change ID.")
+    suites = sandbox_repository.suites_for_rule(rule_id, change_id)
+    if not suites:
+        raise ValueError("Rule approval requires a completed 50-case sandbox suite.")
+    report = get_suite(suites[0]["suite_id"])
+    if (
+        report["status"] != "completed"
+        or report["change_id"] != change_id
+        or report["proposed_rule"]["version"] != version
+        or report["total_generated"] != 50
+        or report["total_executed"] != 50
+        or report["passed"] != 50
+        or report["failed"] != 0
+        or report["pending"] != 0
+        or len(report["regression_results"]) != 50
+        or any(item["passed"] is not True for item in report["regression_results"])
+    ):
+        raise ValueError("Rule approval requires 50 passing executions and regressions.")
 
 
 def approve_rule(rule_id: str, reviewer_id: str, note: str = "") -> dict:
@@ -16,6 +44,9 @@ def approve_rule(rule_id: str, reviewer_id: str, note: str = "") -> dict:
             tests = workflow.get("tests", [])
             if not tests or any(test["failed"] or test["invalid"] for test in tests):
                 raise ValueError("Rule approval requires executed, passing validation tests.")
+            _require_successful_sandbox(
+                rule_id, rule.get("change_id"), rule["version"]
+            )
             approval = ApprovalRecord(
                 rule_id=rule_id,
                 version=rule["version"],
@@ -45,6 +76,9 @@ def export_preview(rule_id: str) -> dict:
             tests = workflow.get("tests", [])
             if not tests or any(test["failed"] or test["invalid"] for test in tests):
                 raise ValueError("Export requires completed validation with no failed or invalid tests.")
+            _require_successful_sandbox(
+                rule_id, rule.get("change_id"), rule["version"]
+            )
             package = {
                 "environment": "SIMULATION_ONLY",
                 "rule": rule,

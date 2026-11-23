@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt
+from cidan.sandbox.schemas import SandboxRule
 
 
 class StrictModel(BaseModel):
@@ -11,7 +12,14 @@ class StrictModel(BaseModel):
 class Citation(StrictModel):
     document_id: str
     filename: str
-    document_type: Literal["circular", "policy_handbook", "unknown"]
+    document_type: Literal[
+        "circular",
+        "policy_handbook",
+        "amendment",
+        "baseline_policy",
+        "standalone_document",
+        "unknown",
+    ]
     page: int
     excerpt: str
     chunk_id: str
@@ -36,6 +44,18 @@ class Obligation(StrictModel):
     ambiguities: list[str] = Field(default_factory=list)
     source_label: Literal["synthetic_demo_source"] = "synthetic_demo_source"
     status: str = "needs_review"
+    change_classification: Literal[
+        "NEW", "MODIFIED", "UNCHANGED", "SUPERSEDED", "POTENTIAL_CONFLICT", "NEEDS_REVIEW"
+    ] = "NEW"
+    previous_requirement: str | None = None
+    amended_requirement: str | None = None
+    source_document: str = ""
+    page_number: int = 1
+    evidence_references: list[Citation] = Field(default_factory=list)
+    surrounding_context: str = ""
+    verification_status: Literal[
+        "verified", "partially_verified", "unverified", "needs_human_review"
+    ] = "verified"
 
 
 class PolicyFinding(StrictModel):
@@ -64,6 +84,7 @@ class RuleCondition(StrictModel):
 class RuleProposal(StrictModel):
     rule_id: str
     version: StrictInt = Field(ge=1)
+    change_id: str | None = None
     business_purpose: str
     source_obligation_ids: list[str] = Field(min_length=1)
     source_policy_references: list[str] = Field(default_factory=list)
@@ -79,6 +100,9 @@ class RuleProposal(StrictModel):
     validation_criteria: list[str] = Field(min_length=1)
     rollback_considerations: str
     supporting_citations: list[Citation] = Field(min_length=1)
+    baseline_rule: SandboxRule | None = None
+    sandbox_rule: SandboxRule | None = None
+    unrelated_product_types: list[str] = Field(default_factory=list)
     action: Literal[
         "flag_review", "second_review", "require_exception_reason", "retention_gap"
     ]
@@ -138,6 +162,8 @@ class TestSummary(StrictModel):
     invalid: int
     pass_rate: float | None
     results: list[TestResult]
+    sandbox_suite_id: str | None = None
+    pending: int = 0
 
 
 class ApprovalRecord(StrictModel):
