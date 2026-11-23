@@ -217,8 +217,45 @@ def test_llm_exception_fails_safe_to_human_review():
     assert p.action == "flag_review"
     assert p.baseline_rule is None
     assert p.sandbox_rule is None
+    assert p.trigger_conditions == []
+    assert p.required_inputs == []
     assert len(p.unresolved_questions) >= 1
     assert "human review" in p.unresolved_questions[0].lower()
+
+
+def test_missing_obligation_is_recorded_for_human_review(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent3_storage, "WORKFLOW_OUTPUTS_DIR", tmp_path)
+    finding = _make_finding("OBL-MISSING", "partially_covered")
+
+    proposals = rule_authoring.run([], [finding], workflow_id="WF-MISSING-OBL")
+
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    assert proposal.source_obligation_ids == ["OBL-MISSING"]
+    assert proposal.action == "flag_review"
+    assert proposal.trigger_conditions == []
+    assert proposal.required_inputs == []
+    assert any("no matching obligation record" in reason for reason in proposal.review_reasons)
+    assert proposal.supporting_citations == [finding.circular_citation, *finding.policy_citations[:2]]
+
+    saved_proposals = agent3_storage.load_rule_proposals("WF-MISSING-OBL")
+    assert saved_proposals["total_proposals"] == 1
+    assert saved_proposals["proposals"][0]["action"] == "flag_review"
+
+
+def test_empty_agent3_run_persists_zero_counts_and_execution_status(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent3_storage, "WORKFLOW_OUTPUTS_DIR", tmp_path)
+    finding = _make_finding("OBL-001", "covered")
+
+    assert rule_authoring.run([_make_obligation()], [finding], workflow_id="WF-NO-PROPOSALS") == []
+
+    summary = agent3_storage.load_rule_summary("WF-NO-PROPOSALS")
+    metadata = agent3_storage.load_execution_metadata("WF-NO-PROPOSALS")
+    assert summary["total_proposals"] == 0
+    assert summary["draft_count"] == 0
+    assert summary["sandbox_ready_count"] == 0
+    assert summary["human_review_required_count"] == 0
+    assert metadata["status"] == "completed"
 
 
 def test_agent3_storage_and_json_persistence(tmp_path, monkeypatch):
@@ -250,6 +287,8 @@ def test_agent3_storage_and_json_persistence(tmp_path, monkeypatch):
 
     loaded_evidence = agent3_storage.load_evidence_and_citations(test_wf)
     assert loaded_evidence["total_citations"] >= 1
+    assert all(record["validation_status"] == "validated" for record in loaded_evidence["evidence"])
+    assert all(record["is_valid"] is True for record in loaded_evidence["evidence"])
 
     wf_list = agent3_storage.list_agent3_workflows()
     assert test_wf in wf_list

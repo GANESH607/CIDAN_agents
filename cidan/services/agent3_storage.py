@@ -185,7 +185,8 @@ def load_evidence_and_citations(workflow_id: str) -> dict[str, Any]:
                     "page": cite.get("page", 1),
                     "chunk_id": cite.get("chunk_id", ""),
                     "excerpt": cite.get("excerpt", ""),
-                    "is_valid": bool(cite.get("chunk_id")),
+                    "is_valid": False,
+                    "validation_status": "not_available",
                 })
         return {
             "schema_version": SCHEMA_VERSION,

@@ -3,7 +3,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, Field
 
 from cidan.agents.base import invoke_structured
-from cidan.models import Citation, PolicyFinding, RuleCondition, RuleProposal
+from cidan.models import Citation, PolicyFinding, RuleProposal
 
 logger = logging.getLogger(__name__)
 
@@ -31,30 +31,35 @@ product evidence must remain for manual review."""
 
 
 def _create_human_review_proposal(
-    item: dict,
+    item: dict | None,
     finding: PolicyFinding,
     reason: str = "Insufficient deterministic policy evidence; requires human compliance review before rule definition.",
 ) -> RuleProposal:
-    source_citation = Citation.model_validate(item["source"])
+    source_citation = (
+        Citation.model_validate(item["source"])
+        if item is not None
+        else finding.circular_citation
+    )
     citations = [source_citation]
     if finding.policy_citations:
         citations.extend(finding.policy_citations[:2])
 
-    clause = str(item.get("clause_id", finding.obligation_id)).replace(".", "-")
+    clause = str((item or {}).get("clause_id", finding.obligation_id)).replace(".", "-")
     rule_id = f"RULE-{clause}-REV"
     change_id = f"CHG-{clause}"
     provision = finding.matching_policy_provision or "None identified"
+    required_action = (item or {}).get("required_action") or finding.recommended_action
 
     return RuleProposal(
         rule_id=rule_id,
         version=1,
         change_id=change_id,
         business_purpose=f"Compliance review draft for {finding.obligation_id}: {finding.reasoning[:120]}",
-        source_obligation_ids=[item["obligation_id"]],
+        source_obligation_ids=[item["obligation_id"] if item is not None else finding.obligation_id],
         source_policy_references=[provision] if provision else [],
-        description=f"Human review required: draft declarative rule for {item.get('required_action', finding.obligation_id)[:100]}. {finding.missing_or_inconsistent[:120]}",
-        trigger_conditions=[RuleCondition(field="is_emergency", operator="eq", value=True)],
-        required_inputs=["transaction_id", "is_emergency"],
+        description=f"Human review required: draft declarative rule for {required_action[:100]}. {finding.missing_or_inconsistent[:120]}",
+        trigger_conditions=[],
+        required_inputs=[],
         decision_outcomes=["flag_review"],
         validation_criteria=["Compliance manual review and rule specification approval."],
         rollback_considerations="Maintain existing manual compliance review controls.",
@@ -68,7 +73,7 @@ def _create_human_review_proposal(
         unresolved_questions=[reason],
         review_reasons=[reason],
         existing_policy_provision=provision,
-        proposed_rule=f"Flag for human review: {item.get('required_action', 'Compliance review')}",
+        proposed_rule=f"Flag for human review: {required_action or 'Compliance review'}",
         reason_for_change=finding.reasoning,
         operational_impact=finding.operational_impact,
         confidence=finding.confidence,
@@ -103,7 +108,8 @@ def _save_outputs(
                 "page": citation.page,
                 "chunk_id": citation.chunk_id,
                 "excerpt": citation.excerpt,
-                "is_valid": bool(citation.chunk_id),
+                "is_valid": True,
+                "validation_status": "validated",
             })
     agent3_storage.save_evidence_and_citations(workflow_id, evidence_records)
 
@@ -161,6 +167,14 @@ def run(
 
         item = obligation_by_id.get(ob_id)
         if not item:
+            proposals.append(_create_human_review_proposal(
+                None,
+                finding,
+                reason=(
+                    f"Eligible finding {ob_id} has no matching obligation record; "
+                    "human review is required before rule authoring."
+                ),
+            ))
             continue
 
         compact_obligation = {
@@ -249,7 +263,12 @@ def run(
     eligible_ids = {finding.obligation_id for finding in eligible}
     citations_by_obligation: dict[str, dict[tuple[str, str, str, int, str], str]] = {}
     for finding in eligible:
-        source = Citation.model_validate(obligation_by_id[finding.obligation_id]["source"])
+        item = obligation_by_id.get(finding.obligation_id)
+        source = (
+            Citation.model_validate(item["source"])
+            if item is not None
+            else finding.circular_citation
+        )
         citations = [source, finding.circular_citation, *finding.policy_citations]
         citations_by_obligation[finding.obligation_id] = {
             (
@@ -294,8 +313,14 @@ def run(
             proposal_citation_keys.add(citation_key)
 
         for obligation_id in proposal.source_obligation_ids:
-            obligation_source = Citation.model_validate(
-                obligation_by_id[obligation_id]["source"]
+            matching_finding = next(
+                finding for finding in eligible if finding.obligation_id == obligation_id
+            )
+            obligation = obligation_by_id.get(obligation_id)
+            obligation_source = (
+                Citation.model_validate(obligation["source"])
+                if obligation is not None
+                else matching_finding.circular_citation
             )
             source_key = (
                 obligation_source.document_id,

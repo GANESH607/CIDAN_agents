@@ -119,3 +119,41 @@ def test_dashboard_agent3_data_connection():
     assert "Draft" in badge
 
 
+def test_dashboard_agent3_citation_validation_uses_backend_result():
+    citation = {
+        "document_id": "doc-1",
+        "filename": "circular.pdf",
+        "document_type": "circular",
+        "page": 1,
+        "chunk_id": "chunk-1",
+        "excerpt": "Evidence excerpt",
+    }
+
+    assert dashboard.get_agent3_citation_validation_status(
+        {"evidence": [{"rule_id": "RULE-1", **citation}]},
+        "RULE-1",
+        citation,
+    ) == "not available"
+    assert dashboard.get_agent3_citation_validation_status(
+        {"evidence": [{"rule_id": "RULE-1", **citation, "validation_status": "validated"}]},
+        "RULE-1",
+        citation,
+    ) == "validated"
+    assert dashboard.get_agent3_citation_validation_status(
+        {"evidence": [{"rule_id": "RULE-2", **citation, "validation_status": "validated"}]},
+        "RULE-1",
+        citation,
+    ) == "not available"
+
+
+def test_dashboard_agent3_metrics_show_zero_counts_without_proposals():
+    assert dashboard.get_agent3_dashboard_metrics([]) == {
+        "total_proposals": 0,
+        "draft_count": 0,
+        "sandbox_ready_count": 0,
+        "human_review_count": 0,
+        "high_risk_count": 0,
+        "action_count": 0,
+    }
+
+

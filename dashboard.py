@@ -648,6 +648,42 @@ def get_status_badge(status: str) -> str:
     return f'<span class="badge-pill badge-demo">{status}</span>'
 
 
+def get_agent3_citation_validation_status(
+    evidence_data: dict[str, Any],
+    rule_id: str,
+    citation: dict[str, Any],
+) -> str:
+    citation_fields = ("document_id", "filename", "document_type", "page", "chunk_id", "excerpt")
+    for evidence in evidence_data.get("evidence", []):
+        if evidence.get("rule_id") != rule_id:
+            continue
+        if all(evidence.get(field) == citation.get(field) for field in citation_fields):
+            status = evidence.get("validation_status")
+            if status in {"validated", "invalid"}:
+                return status
+    return "not available"
+
+
+def get_agent3_dashboard_metrics(proposals: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "total_proposals": len(proposals),
+        "draft_count": sum(1 for proposal in proposals if proposal.get("status") == "draft"),
+        "sandbox_ready_count": sum(
+            1 for proposal in proposals
+            if proposal.get("sandbox_readiness")
+            or (proposal.get("baseline_rule") and proposal.get("sandbox_rule"))
+        ),
+        "human_review_count": sum(
+            1 for proposal in proposals
+            if proposal.get("action") == "flag_review"
+            or proposal.get("unresolved_questions")
+            or proposal.get("review_reasons")
+        ),
+        "high_risk_count": sum(1 for proposal in proposals if proposal.get("risk_level") == "high"),
+        "action_count": len({proposal.get("action") for proposal in proposals if proposal.get("action")}),
+    }
+
+
 def get_available_workflows() -> list[str]:
     """Retrieve all available workflow IDs from storage."""
     stored = set(agent1_storage.list_agent1_workflows())
@@ -1620,27 +1656,28 @@ else:
             evidence_data = {}
             metadata = {}
 
+        metrics = get_agent3_dashboard_metrics(proposals_list)
+        total_proposals = metrics["total_proposals"]
+        draft_count = metrics["draft_count"]
+        sandbox_ready_count = metrics["sandbox_ready_count"]
+        human_review_count = metrics["human_review_count"]
+        risk_counts = summary_data.get("risk_counts", {})
+        action_counts = summary_data.get("action_counts", {})
+
+        st.caption(f"Agent 3 execution status: {metadata.get('status', 'unknown')}")
+        # Metrics are useful even when there were no eligible findings to propose rules for.
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        col1.metric("Total Proposals", total_proposals)
+        col2.metric("Draft Status", f"{draft_count} (100%)" if total_proposals else "0")
+        col3.metric("Sandbox Ready", sandbox_ready_count)
+        col4.metric("Needs Review", human_review_count)
+        col5.metric("High Risk", metrics["high_risk_count"])
+        col6.metric("Actions Defined", metrics["action_count"])
+
         if not proposals_list:
             st.warning(f"No rule proposals recorded yet for workflow `{selected_workflow_id}`.")
             st.caption("Proposals are generated only for obligations classified as partially_covered or potential_conflict.")
         else:
-            # Metrics
-            total_proposals = len(proposals_list)
-            draft_count = sum(1 for p in proposals_list if p.get("status") == "draft")
-            sandbox_ready_count = sum(1 for p in proposals_list if p.get("sandbox_readiness") or (p.get("baseline_rule") and p.get("sandbox_rule")))
-            human_review_count = sum(1 for p in proposals_list if p.get("action") == "flag_review" or p.get("unresolved_questions") or p.get("review_reasons"))
-            action_counts = summary_data.get("action_counts", {})
-            risk_counts = summary_data.get("risk_counts", {})
-
-            # Top metrics row (6 columns)
-            col1, col2, col3, col4, col5, col6 = st.columns(6)
-            col1.metric("Total Proposals", total_proposals)
-            col2.metric("Draft Status", f"{draft_count} (100%)")
-            col3.metric("Sandbox Ready", sandbox_ready_count)
-            col4.metric("Needs Review", human_review_count)
-            col5.metric("High Risk", risk_counts.get("high", 0))
-            col6.metric("Actions Defined", len(action_counts))
-
             # Agent 3 Navigation Tabs
             tab_overview, tab_proposals, tab_evidence, tab_validation, tab_sandbox = st.tabs(
                 [
@@ -1806,12 +1843,19 @@ else:
                     ob_id = p.get("obligation_id") or (p.get("source_obligation_ids", [""])[0])
                     cites = p.get("supporting_citations", [])
 
-                    with st.expander(f"Citations for {r_id} ({ob_id}) — {len(cites)} Sources Verified"):
+                    with st.expander(f"Citations for {r_id} ({ob_id}) — {len(cites)} Sources"):
                         for idx, c in enumerate(cites, 1):
                             chunk_id = c.get("chunk_id", "N/A")
                             doc_type = c.get("document_type", "unknown")
-                            is_valid = bool(chunk_id and chunk_id != "N/A")
-                            tag = '<span style="color:#34D399; font-weight:bold;">[VALID SOURCE CHUNK]</span>' if is_valid else '<span style="color:#F87171; font-weight:bold;">[INVALID]</span>'
+                            validation_status = get_agent3_citation_validation_status(
+                                evidence_data, r_id, c
+                            )
+                            if validation_status == "validated":
+                                tag = '<span style="color:#34D399; font-weight:bold;">[BACKEND VALIDATED]</span>'
+                            elif validation_status == "invalid":
+                                tag = '<span style="color:#F87171; font-weight:bold;">[BACKEND INVALID]</span>'
+                            else:
+                                tag = '<span style="color:#FBBF24; font-weight:bold;">[VALIDATION UNAVAILABLE]</span>'
 
                             render_html(
                                 f"""

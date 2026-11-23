@@ -120,8 +120,8 @@ class RuleProposal(StrictModel):
     source_obligation_ids: list[str] = Field(min_length=1)
     source_policy_references: list[str] = Field(default_factory=list)
     description: str
-    trigger_conditions: list[RuleCondition] = Field(min_length=1)
-    required_inputs: list[str] = Field(min_length=1)
+    trigger_conditions: list[RuleCondition] = Field(default_factory=list)
+    required_inputs: list[str] = Field(default_factory=list)
     decision_outcomes: list[str] = Field(min_length=1)
     exceptions: list[str] = Field(default_factory=list)
     effective_date: str = "not_specified"
