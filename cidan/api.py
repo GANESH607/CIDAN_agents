@@ -258,11 +258,27 @@ def workflow_report_markdown(
 
 @app.get("/rules")
 def rules(_: None = Depends(require_access_token)) -> list[dict[str, Any]]:
-    return [
-        {"workflow_id": workflow["workflow_id"], **proposal}
-        for workflow in list_workflows()
-        for proposal in workflow.get("proposals", [])
-    ]
+    from cidan.services import agent3_storage
+    seen_rule_ids = set()
+    result = []
+    for workflow in list_workflows():
+        wf_id = workflow.get("workflow_id", "")
+        for proposal in workflow.get("proposals", []):
+            r_id = proposal.get("rule_id")
+            if r_id and r_id not in seen_rule_ids:
+                seen_rule_ids.add(r_id)
+                result.append({"workflow_id": wf_id, **proposal})
+    for wf_id in agent3_storage.list_agent3_workflows():
+        try:
+            stored = agent3_storage.load_rule_proposals(wf_id)
+            for proposal in stored.get("proposals", []):
+                r_id = proposal.get("rule_id")
+                if r_id and r_id not in seen_rule_ids:
+                    seen_rule_ids.add(r_id)
+                    result.append({"workflow_id": wf_id, **proposal})
+        except Exception:
+            pass
+    return result
 
 
 @app.get("/rules/{rule_id}")
@@ -270,10 +286,19 @@ def get_rule(
     rule_id: str,
     _: None = Depends(require_access_token),
 ) -> dict[str, Any]:
+    from cidan.services import agent3_storage
     for workflow in list_workflows():
         for proposal in workflow.get("proposals", []):
             if proposal.get("rule_id") == rule_id:
                 return {"workflow_id": workflow["workflow_id"], **proposal}
+    for wf_id in agent3_storage.list_agent3_workflows():
+        try:
+            stored = agent3_storage.load_rule_proposals(wf_id)
+            for proposal in stored.get("proposals", []):
+                if proposal.get("rule_id") == rule_id:
+                    return {"workflow_id": wf_id, **proposal}
+        except Exception:
+            pass
     raise HTTPException(status_code=404, detail=f"Rule not found: {rule_id}")
 
 
@@ -445,4 +470,69 @@ def get_agent1_metrics(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Agent 3 — Rule Proposal Endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/workflows/{id}/agents/rule-proposal")
+@app.get("/workflows/{id}/agents/rule-authoring")
+def get_agent3_overview(
+    id: str,
+    _: None = Depends(require_access_token),
+) -> dict[str, Any]:
+    from cidan.services import agent3_storage
+    try:
+        return agent3_storage.load_rule_summary(id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/workflows/{id}/agents/rule-proposal/proposals")
+@app.get("/workflows/{id}/agents/rule-authoring/proposals")
+def get_agent3_proposals(
+    id: str,
+    _: None = Depends(require_access_token),
+) -> dict[str, Any]:
+    from cidan.services import agent3_storage
+    try:
+        return agent3_storage.load_rule_proposals(id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/workflows/{id}/agents/rule-proposal/evidence")
+@app.get("/workflows/{id}/agents/rule-authoring/evidence")
+def get_agent3_evidence(
+    id: str,
+    _: None = Depends(require_access_token),
+) -> dict[str, Any]:
+    from cidan.services import agent3_storage
+    try:
+        return agent3_storage.load_evidence_and_citations(id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/workflows/{id}/agents/rule-proposal/metadata")
+@app.get("/workflows/{id}/agents/rule-authoring/metadata")
+def get_agent3_metadata(
+    id: str,
+    _: None = Depends(require_access_token),
+) -> dict[str, Any]:
+    from cidan.services import agent3_storage
+    try:
+        return agent3_storage.load_execution_metadata(id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 

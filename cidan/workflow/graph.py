@@ -89,9 +89,11 @@ def build_graph() -> Any:
                     policy_mapping.run(
                         [obligation],
                         policy_docs,
-                        workflow_id=workflow_id,
+                        workflow_id=None,
                     )
                 )
+            if workflow_id:
+                policy_mapping._save_outputs(workflow_id, obligations, findings)
             return {"findings": [item.model_dump(mode="json") for item in findings], "stage": "mapped"}
         except Exception as exc:
             return failure("policy_mapping", exc)
@@ -99,7 +101,10 @@ def build_graph() -> Any:
     def author_node(state: WorkflowState) -> dict:
         try:
             findings = [PolicyFinding.model_validate(item) for item in state["findings"]]
-            proposals = rule_authoring.run(state["obligations"], findings)
+            workflow_id = state.get("workflow_id")
+            proposals = rule_authoring.run(
+                state["obligations"], findings, workflow_id=workflow_id
+            )
             return {"proposals": [item.model_dump(mode="json") for item in proposals], "stage": "authored"}
         except Exception as exc:
             return failure("rule_authoring", exc)

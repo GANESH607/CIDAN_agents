@@ -130,3 +130,80 @@ def load_policy_findings(workflow_id: str) -> dict[str, Any]:
     if not file_path.exists():
         raise FileNotFoundError(f"Policy findings not found for workflow {workflow_id}")
     return json.loads(file_path.read_text(encoding="utf-8"))
+
+
+def load_evidence_and_citations(workflow_id: str) -> dict[str, Any]:
+    output_dir = get_agent2_output_dir(workflow_id, create=False)
+    file_path = output_dir / "evidence_and_citations.json"
+    if not file_path.exists():
+        # Fall back to deriving evidence records from policy findings if available
+        findings_data = load_policy_findings(workflow_id)
+        evidence_records = []
+        for f in findings_data.get("findings", []):
+            for pc in f.get("policy_citations", []):
+                evidence_records.append({
+                    "obligation_id": f.get("obligation_id"),
+                    "status": f.get("status"),
+                    "circular_chunk_id": f.get("circular_citation", {}).get("chunk_id", ""),
+                    "policy_chunk_id": pc.get("chunk_id", ""),
+                    "policy_filename": pc.get("filename", ""),
+                    "policy_page": pc.get("page", 1),
+                    "policy_excerpt": pc.get("excerpt", ""),
+                })
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "workflow_id": workflow_id,
+            "total_citations": len(evidence_records),
+            "evidence": evidence_records,
+        }
+    return json.loads(file_path.read_text(encoding="utf-8"))
+
+
+def load_mapping_summary(workflow_id: str) -> dict[str, Any]:
+    output_dir = get_agent2_output_dir(workflow_id, create=False)
+    file_path = output_dir / "mapping_summary.json"
+    if not file_path.exists():
+        # Derive summary from policy findings if mapping_summary.json not found
+        findings_data = load_policy_findings(workflow_id)
+        findings = findings_data.get("findings", [])
+        status_counts: dict[str, int] = {}
+        for f in findings:
+            st = f.get("status", "unknown")
+            status_counts[st] = status_counts.get(st, 0) + 1
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "workflow_id": workflow_id,
+            "total_findings": len(findings),
+            "total_obligations": findings_data.get("obligations_evaluated", len(findings)),
+            "status_counts": status_counts,
+            "fully_covered_count": status_counts.get("covered", 0),
+            "partially_covered_count": status_counts.get("partially_covered", 0),
+            "potential_conflict_count": status_counts.get("potential_conflict", 0),
+            "requires_human_review_count": status_counts.get("requires_human_review", 0),
+            "not_found_count": status_counts.get("not_found", 0),
+        }
+    return json.loads(file_path.read_text(encoding="utf-8"))
+
+
+def load_execution_metadata(workflow_id: str) -> dict[str, Any]:
+    output_dir = get_agent2_output_dir(workflow_id, create=False)
+    file_path = output_dir / "execution_metadata.json"
+    if not file_path.exists():
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "workflow_id": workflow_id,
+            "status": "completed",
+            "agent": "agent_2_policy_mapping",
+        }
+    return json.loads(file_path.read_text(encoding="utf-8"))
+
+
+def list_agent2_workflows() -> list[str]:
+    """List workflow IDs that have saved Agent 2 outputs."""
+    if not WORKFLOW_OUTPUTS_DIR.is_dir():
+        return []
+    result = []
+    for d in sorted(WORKFLOW_OUTPUTS_DIR.iterdir()):
+        if d.is_dir() and (d / "agent_2_policy_mapping" / "policy_findings.json").is_file():
+            result.append(d.name)
+    return result

@@ -138,6 +138,16 @@ class RuleProposal(StrictModel):
         "flag_review", "second_review", "require_exception_reason", "retention_gap"
     ]
     status: Literal["draft", "validated", "approved_for_export"] = "draft"
+    existing_policy_provision: str | None = None
+    proposed_rule: str | None = None
+    reason_for_change: str | None = None
+    operational_impact: str | None = None
+    confidence: float = Field(default=0.85, ge=0.0, le=1.0)
+    review_reasons: list[str] = Field(default_factory=list)
+
+    @property
+    def obligation_id(self) -> str:
+        return self.source_obligation_ids[0] if self.source_obligation_ids else ""
 
 
 class MappingResult(StrictModel):

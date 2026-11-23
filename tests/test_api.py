@@ -180,3 +180,45 @@ def test_agent1_endpoints_404_on_missing_workflow(tmp_path, monkeypatch):
     res = client.get("/workflows/nonexistent-workflow-999/agents/obligation-extraction")
     assert res.status_code == 404
 
+
+def test_agent3_endpoints_return_stored_results():
+    from cidan.services.demo_seeder import seed_cidan_001_if_needed
+    seed_cidan_001_if_needed(force=True)
+
+    # 1. Summary
+    res_summary = client.get("/workflows/CIDAN-001/agents/rule-proposal")
+    assert res_summary.status_code == 200
+    summary_data = res_summary.json()
+    assert summary_data["total_proposals"] == 2
+    assert summary_data["draft_count"] == 2
+
+    # 2. Proposals
+    res_props = client.get("/workflows/CIDAN-001/agents/rule-proposal/proposals")
+    assert res_props.status_code == 200
+    props_data = res_props.json()
+    assert props_data["total_proposals"] == 2
+    for p in props_data["proposals"]:
+        assert p["status"] == "draft"
+        assert p["existing_policy_provision"]
+        assert p["proposed_rule"]
+
+    # 3. Evidence
+    res_evi = client.get("/workflows/CIDAN-001/agents/rule-proposal/evidence")
+    assert res_evi.status_code == 200
+    evi_data = res_evi.json()
+    assert evi_data["total_citations"] >= 1
+
+    # 4. Global /rules endpoint
+    res_rules = client.get("/rules")
+    assert res_rules.status_code == 200
+    rules_list = res_rules.json()
+    assert any(r.get("rule_id") == "RULE-2-5-SLA" for r in rules_list)
+
+
+def test_agent3_endpoints_404_on_missing_workflow(tmp_path, monkeypatch):
+    import cidan.services.agent3_storage as storage
+    monkeypatch.setattr(storage, "WORKFLOW_OUTPUTS_DIR", tmp_path / "workflow_outputs")
+    res = client.get("/workflows/nonexistent-workflow-999/agents/rule-proposal")
+    assert res.status_code == 404
+
+
