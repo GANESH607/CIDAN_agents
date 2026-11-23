@@ -1,7 +1,10 @@
+import logging
 from langchain_core.documents import Document
 
 from cidan.ingestion.vector_store import create_vector_store
 from cidan.models import Citation
+
+logger = logging.getLogger(__name__)
 
 
 def retrieve(query: str, document_type: str | list[str], k: int = 6) -> list[Document]:
@@ -10,6 +13,7 @@ def retrieve(query: str, document_type: str | list[str], k: int = 6) -> list[Doc
         # Support multiple document types with deduplication
         docs = []
         seen = set()
+        retrieval_errors: list[str] = []
         for dt in document_type:
             try:
                 sub_docs = store.similarity_search(query, k=k, filter={"document_type": dt})
@@ -18,14 +22,29 @@ def retrieve(query: str, document_type: str | list[str], k: int = 6) -> list[Doc
                     if cid not in seen:
                         seen.add(cid)
                         docs.append(d)
-            except Exception:
+            except Exception as exc:
+                logger.error("Failed similarity search for query '%s' and document_type '%s': %s", query, dt, exc)
+                retrieval_errors.append(f"{dt}: {exc}")
                 continue
+        if retrieval_errors:
+            if not docs:
+                err_msg = "; ".join(retrieval_errors[:3])
+                logger.error("Similarity search failed for all document types: %s", err_msg)
+                raise RuntimeError(f"Vector store similarity search failed for all document types: {err_msg}")
+            for d in docs:
+                d.metadata["retrieval_incomplete"] = True
+                d.metadata["retrieval_errors"] = retrieval_errors
         return docs[:k]
-    return store.similarity_search(
-        query,
-        k=k,
-        filter={"document_type": document_type},
-    )
+
+    try:
+        return store.similarity_search(
+            query,
+            k=k,
+            filter={"document_type": document_type},
+        )
+    except Exception as exc:
+        logger.error("Similarity search failed for query '%s' and document_type '%s': %s", query, document_type, exc)
+        raise RuntimeError(f"Vector store similarity search failed for {document_type}: {exc}") from exc
 
 
 def retrieve_policy_candidates(
@@ -70,6 +89,7 @@ def retrieve_policy_candidates(
 
     results: list[Document] = []
     seen_chunk_ids: set[str] = set()
+    retrieval_errors: list[str] = []
 
     for q in queries:
         for ptype in policy_types:
@@ -80,8 +100,9 @@ def retrieve_policy_candidates(
                     if cid not in seen_chunk_ids:
                         seen_chunk_ids.add(cid)
                         results.append(doc)
-            except Exception:
-                # If filtered similarity search fails for a specific type, continue
+            except Exception as exc:
+                logger.error("Error during policy similarity search for query '%s', type '%s': %s", q, ptype, exc)
+                retrieval_errors.append(f"{ptype}: {exc}")
                 continue
 
     # If nothing found with filtered search, try unfiltered as a fallback
@@ -96,8 +117,20 @@ def retrieve_policy_candidates(
                         if cid not in seen_chunk_ids:
                             seen_chunk_ids.add(cid)
                             results.append(doc)
-            except Exception:
+            except Exception as exc:
+                logger.error("Error during unfiltered fallback search for query '%s': %s", q, exc)
+                retrieval_errors.append(f"unfiltered: {exc}")
                 continue
+
+    if retrieval_errors:
+        if not results:
+            err_summary = "; ".join(retrieval_errors[:3])
+            logger.error("Policy candidate retrieval failed completely due to errors: %s", err_summary)
+            raise RuntimeError(f"Policy candidate retrieval failed due to errors: {err_summary}")
+        logger.warning("Policy retrieval incomplete: %d search error(s) encountered", len(retrieval_errors))
+        for doc in results:
+            doc.metadata["retrieval_incomplete"] = True
+            doc.metadata["retrieval_errors"] = retrieval_errors
 
     return results[:top_k]
 

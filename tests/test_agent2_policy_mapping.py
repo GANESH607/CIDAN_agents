@@ -74,7 +74,7 @@ def test_policy_mapping_classifications_all_five_statuses():
         ("covered", 0.95),
         ("partially_covered", 0.85),
         ("potential_conflict", 0.90),
-        ("not_found", 0.75),
+        ("not_found", 0.70),
         ("requires_human_review", 0.40),
     ]
     obligation = make_obligation()
@@ -101,7 +101,8 @@ def test_policy_mapping_classifications_all_five_statuses():
         assert len(findings) == 1
         finding = findings[0]
         assert finding.status == expected_status
-        assert finding.confidence == conf
+        assert finding.model_reported_confidence == conf
+        assert finding.confidence <= conf
         assert finding.obligation_id == obligation.obligation_id
         assert finding.circular_citation.chunk_id == obligation.source.chunk_id
         if cited_chunks:
@@ -109,6 +110,165 @@ def test_policy_mapping_classifications_all_five_statuses():
             assert finding.policy_citations[0].chunk_id == "pol-c1"
         else:
             assert len(finding.policy_citations) == 0
+
+
+def test_retrieval_error_handling_and_incomplete_retrieval_safety(caplog):
+    """Improvement 1: Retrieval failures are logged and incomplete retrieval is not mistaken for missing policy."""
+    import logging
+    from cidan.ingestion import retrieval
+
+    obligation = make_obligation()
+
+    # Simulate vector store with errors
+    class BrokenVectorStore:
+        def similarity_search(self, query, k=8, filter=None):
+            raise ConnectionError("Vector store cluster unreachable")
+
+    # When all retrieval fails due to error, retrieve_policy_candidates raises RuntimeError and logs error
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError) as exc_info:
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(retrieval, "create_vector_store", lambda: BrokenVectorStore())
+                retrieval.retrieve_policy_candidates(obligation)
+        assert "Vector store cluster unreachable" in str(exc_info.value)
+        assert any("Error during policy similarity search" in r.message for r in caplog.records)
+
+    # When partial retrieval succeeds but is incomplete, policy_mapping ensures it's not mistaken for not_found
+    doc = make_policy_doc(chunk_id="pol-partial")
+    doc.metadata["retrieval_incomplete"] = True
+    doc.metadata["retrieval_errors"] = ["partial error"]
+
+    def model_claiming_not_found(schema, system, prompt):
+        return schema(
+            status="not_found",
+            reasoning="No provision was found in retrieved text.",
+            missing_or_inconsistent="Not present.",
+            operational_impact="Verify manually.",
+            recommended_action="Manual review.",
+            confidence=0.85,
+            evidence_limitations=[],
+            cited_policy_chunk_ids=[],
+        )
+
+    findings = policy_mapping.run([obligation], [doc], llm_call=model_claiming_not_found)
+    assert len(findings) == 1
+    # not_found MUST be converted to requires_human_review when retrieval was incomplete!
+    assert findings[0].status == "requires_human_review"
+    assert any("incomplete retrieval" in lim.lower() for lim in findings[0].evidence_limitations)
+
+
+def test_citation_improvements_up_to_five_and_strict_validation():
+    """Improvement 2: Support up to 5 citations and strictly validate each against retrieved chunks."""
+    obligation = make_obligation()
+    docs = [
+        make_policy_doc(chunk_id=f"pol-{i}", page=i, clause_id=f"2.{i}")
+        for i in range(1, 6)
+    ]
+
+    def five_citation_llm(schema, system, prompt):
+        assert "five citation chunk IDs" in system
+        return schema(
+            status="covered",
+            reasoning="Coverage supported across 5 separate policy clauses.",
+            missing_or_inconsistent="None.",
+            operational_impact="Operations aligned.",
+            recommended_action="Monitor SLA compliance.",
+            confidence=0.95,
+            evidence_limitations=[],
+            cited_policy_chunk_ids=["pol-1", "pol-2", "pol-3", "pol-4", "pol-5"],
+        )
+
+    findings = policy_mapping.run([obligation], docs, llm_call=five_citation_llm)
+    assert len(findings) == 1
+    assert len(findings[0].policy_citations) == 5
+    assert [c.chunk_id for c in findings[0].policy_citations] == [f"pol-{i}" for i in range(1, 6)]
+
+    # Test with a mix of valid and invalid chunk IDs
+    def mixed_citation_llm(schema, system, prompt):
+        return schema(
+            status="covered",
+            reasoning="Coverage claim.",
+            missing_or_inconsistent="None.",
+            operational_impact="None.",
+            recommended_action="None.",
+            confidence=0.90,
+            evidence_limitations=[],
+            cited_policy_chunk_ids=["pol-1", "fake-chunk-99"],
+        )
+
+    findings_mixed = policy_mapping.run([obligation], docs, llm_call=mixed_citation_llm)
+    assert len(findings_mixed[0].policy_citations) == 1
+    assert findings_mixed[0].policy_citations[0].chunk_id == "pol-1"
+    assert any("unverified citations" in lim.lower() for lim in findings_mixed[0].evidence_limitations)
+
+
+def test_confidence_distinguishes_model_confidence_from_evidence_quality():
+    """Improvement 3: Model-reported confidence is distinct from evidence quality and cannot inflate confidence."""
+    obligation = make_obligation()
+    doc = make_policy_doc(chunk_id="pol-1")
+
+    # High model confidence (0.99) but invalid citation -> evidence quality is 0.0, confidence must not be 0.99
+    def overconfident_llm(schema, system, prompt):
+        return schema(
+            status="covered",
+            reasoning="I am absolutely 100% confident this is covered.",
+            missing_or_inconsistent="None.",
+            operational_impact="None.",
+            recommended_action="None.",
+            confidence=0.99,
+            evidence_limitations=[],
+            cited_policy_chunk_ids=["non-existent-chunk"],
+        )
+
+    findings = policy_mapping.run([obligation], [doc], llm_call=overconfident_llm)
+    finding = findings[0]
+    assert finding.model_reported_confidence == 0.99
+    assert finding.evidence_confidence == 0.0
+    assert finding.confidence <= 0.40  # Capped and grounded in evidence quality
+    assert finding.status == "requires_human_review"
+
+
+def test_matching_policy_provision_identifies_most_relevant_clause():
+    """Improvement 4: matching_policy_provision identifies the most relevant clause, not just the first cited chunk."""
+    obligation = make_obligation(
+        clause_id="2.5",
+        text="Acknowledge senior citizen complaints within 1 working day.",
+        required_action="Acknowledge senior citizen complaints within 1 working day",
+    )
+
+    # Chunk 1: Preamble / General definitions (Clause 1.1)
+    doc_preamble = make_policy_doc(
+        chunk_id="pol-preamble",
+        content="Clause 1.1 General Scope: This policy applies to all branch banking operations.",
+        clause_id="1.1",
+        page=1,
+    )
+    # Chunk 2: Exactly matches obligation clause 2.5 and required action
+    doc_target = make_policy_doc(
+        chunk_id="pol-grievance",
+        content="Clause 2.5 Grievance handling | Senior citizen complaints must be acknowledged within 2 working days.",
+        clause_id="2.5",
+        page=3,
+    )
+
+    # LLM happens to cite the preamble first, then the grievance clause second
+    def llm_citing_preamble_first(schema, system, prompt):
+        return schema(
+            status="potential_conflict",
+            reasoning="Timeline conflict between 1 day requirement and 2 day policy.",
+            missing_or_inconsistent="Acknowledgment SLA.",
+            operational_impact="Operational backlog.",
+            recommended_action="Align policy SLA.",
+            confidence=0.90,
+            evidence_limitations=[],
+            cited_policy_chunk_ids=["pol-preamble", "pol-grievance"],
+        )
+
+    findings = policy_mapping.run([obligation], [doc_preamble, doc_target], llm_call=llm_citing_preamble_first)
+    finding = findings[0]
+    # Despite pol-preamble being cited first, matching_policy_provision should correctly select Clause 2.5!
+    assert "2.5" in finding.matching_policy_provision
+    assert "Clause 2.5" in finding.matching_policy_provision
 
 
 def test_missing_retrieval_evidence_fails_safe_to_human_review():
@@ -260,13 +420,32 @@ def test_agent2_structured_json_storage_and_agent3_consumption(tmp_path, monkeyp
     assert summary_file.exists()
 
 
-def test_retrieve_policy_candidates_builds_multi_queries():
+def test_retrieve_policy_candidates_builds_multi_queries(monkeypatch):
     """Requirement 2: Semantic retrieval multi-query construction."""
+    from cidan.ingestion import retrieval
+
     obligation = make_obligation(
         amount_threshold=50000,
         currency="INR",
         deadline_or_frequency="7 days",
     )
-    # Even with an uninitialized or mocked vector store, calling with a dummy store works cleanly
-    docs = retrieve_policy_candidates(obligation, top_k=5)
+    captured_queries = []
+
+    class MockStore:
+        def similarity_search(self, query, k=8, filter=None):
+            captured_queries.append((query, filter))
+            return [
+                Document(
+                    page_content="Policy clause content",
+                    metadata={"chunk_id": f"chunk-{len(captured_queries)}", "document_type": "policy_handbook"},
+                )
+            ]
+
+    monkeypatch.setattr(retrieval, "create_vector_store", lambda: MockStore())
+    docs = retrieval.retrieve_policy_candidates(obligation, top_k=5)
     assert isinstance(docs, list)
+    assert len(captured_queries) >= 3
+    # Check query diversity across multi-queries
+    query_texts = [q[0] for q in captured_queries]
+    assert any("50000" in q for q in query_texts)  # Numerical specifics query
+    assert any("7 days" in q for q in query_texts)  # SLA / operational query

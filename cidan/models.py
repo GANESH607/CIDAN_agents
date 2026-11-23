@@ -101,6 +101,8 @@ class PolicyFinding(StrictModel):
     operational_impact: str
     recommended_action: str
     confidence: float = Field(ge=0, le=1)
+    evidence_confidence: float = Field(default=0.0, ge=0, le=1)
+    model_reported_confidence: float | None = Field(default=None, ge=0, le=1)
     evidence_limitations: list[str] = Field(default_factory=list)
 
 
