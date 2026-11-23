@@ -1,6 +1,7 @@
 from cidan.services import agent1_storage, agent2_storage, agent3_storage
 from cidan.services.demo_seeder import CIDAN_001_ID, seed_cidan_001_if_needed
 import dashboard
+from streamlit.testing.v1 import AppTest
 
 
 def test_dashboard_data_connection():
@@ -113,10 +114,42 @@ def test_dashboard_agent3_data_connection():
     assert "evidence" in evidence
     assert len(evidence["evidence"]) >= 1
 
+    metadata = agent3_storage.load_execution_metadata(CIDAN_001_ID)
+    assert metadata["status"] == "completed"
+
     # 5. Status badge helper supports draft status
     badge = dashboard.get_status_badge("draft")
     assert "badge-draft" in badge
     assert "Draft" in badge
+
+
+def test_agent3_sidebar_selection_loads_actual_dashboard_outputs(monkeypatch):
+    seed_cidan_001_if_needed(force=True)
+    loaded_outputs = set()
+    loader_names = (
+        "load_rule_proposals",
+        "load_rule_summary",
+        "load_evidence_and_citations",
+        "load_execution_metadata",
+    )
+    for loader_name in loader_names:
+        original_loader = getattr(agent3_storage, loader_name)
+
+        def track_loader(workflow_id, _loader=original_loader, _name=loader_name):
+            loaded_outputs.add(_name)
+            return _loader(workflow_id)
+
+        monkeypatch.setattr(agent3_storage, loader_name, track_loader)
+
+    app = AppTest.from_file(dashboard.__file__).run()
+    agent_selection = next(radio for radio in app.radio if radio.label == "Agent Selection")
+    agent_selection.set_value(agent_selection.options[2]).run()
+
+    assert any(
+        caption.value.startswith("Agent 3 execution status:")
+        for caption in app.caption
+    )
+    assert loaded_outputs == set(loader_names)
 
 
 def test_dashboard_agent3_citation_validation_uses_backend_result():

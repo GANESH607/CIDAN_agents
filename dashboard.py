@@ -828,7 +828,7 @@ st.markdown(
                 <span class="flow-step-name">Policy Mapping ✓</span>
             </div>
         </div>
-        <div class="flow-step {'active' if selected_agent == 'Agent 3 – Rule Proposal Generation' else ''}">
+        <div class="flow-step {'active' if selected_agent == 'Agent 3 – Rule Proposal' else ''}">
             <div class="flow-step-icon">&lt;/&gt;</div>
             <div class="flow-step-info">
                 <span class="flow-step-stage">AGENT 3</span>
@@ -1636,7 +1636,7 @@ else:
                     """
                     )
 
-    elif selected_agent == "Agent 3 – Rule Proposal Generation":
+    elif selected_agent == "Agent 3 – Rule Proposal":
         # AGENT 3 DETAILED DASHBOARD
         # Load actual Agent 3 outputs from independent JSON storage
         try:
@@ -1961,7 +1961,7 @@ else:
                 except Exception:
                     pass
 
-    else:
+    elif selected_agent == "Agent 4 – Test Generation":
         st.info(
             f"Visual dashboard view for **{selected_agent}** is currently being enhanced. Please review Agent 1, Agent 2, or Agent 3 for complete multi-tab audit views, or inspect the generated JSON outputs directly in `workflow_outputs/{selected_workflow_id}/`."
         )
