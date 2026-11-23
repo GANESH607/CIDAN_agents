@@ -79,16 +79,19 @@ def build_graph() -> Any:
     def mapping_node(state: WorkflowState) -> dict:
         try:
             obligations = [Obligation.model_validate(item) for item in state["obligations"]]
-            from cidan.ingestion.retrieval import retrieve
+            from cidan.ingestion.retrieval import retrieve_policy_candidates
 
             findings = []
+            workflow_id = state.get("workflow_id")
             for obligation in obligations:
-                query = (
-                    f"{obligation.text} {obligation.applicability} "
-                    f"{obligation.product_type} {obligation.required_action}"
+                policy_docs = retrieve_policy_candidates(obligation, top_k=8)
+                findings.extend(
+                    policy_mapping.run(
+                        [obligation],
+                        policy_docs,
+                        workflow_id=workflow_id,
+                    )
                 )
-                policy_docs = retrieve(query, "policy_handbook", k=3)
-                findings.extend(policy_mapping.run([obligation], policy_docs))
             return {"findings": [item.model_dump(mode="json") for item in findings], "stage": "mapped"}
         except Exception as exc:
             return failure("policy_mapping", exc)
