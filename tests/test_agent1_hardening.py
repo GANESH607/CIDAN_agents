@@ -302,7 +302,7 @@ def test_load_agent1_summary_no_12_4_fallback(tmp_path, monkeypatch):
 
 
 def test_bad_chunk_id_recovery_never_raises():
-    """Bad chunk_id does not abort run, attempts recovery or marks needs_human_review."""
+    """Bad chunk_id that does not identify a retrieved circular passage raises ValueError."""
     doc = Document(
         page_content="Clause 1.1: Mandatory capital reserve ratio of 10%.",
         metadata={"document_id": "doc-01", "filename": "norm.pdf", "page": 1, "chunk_id": "doc-01-p1-c1"},
@@ -318,11 +318,8 @@ def test_bad_chunk_id_recovery_never_raises():
         supporting_excerpt="Mandatory capital reserve ratio of 10%.",
         confidence=0.9,
     )
-    results = circular_understanding.run([doc], llm_call=lambda s, *_: s(obligations=[candidate]))
-    assert len(results) == 1
-    assert results[0].clause_id == "1.1"
-    # Recovered chunk id or flagged with review reason
-    assert len(results[0].review_reasons) > 0 or results[0].source.chunk_id == "doc-01-p1-c1"
+    with pytest.raises(ValueError, match="does not identify a retrieved circular passage"):
+        circular_understanding.run([doc], llm_call=lambda s, *_: s(obligations=[candidate]))
 
 
 def test_deliberately_failing_chunk_produces_completed_with_errors(tmp_path, monkeypatch):

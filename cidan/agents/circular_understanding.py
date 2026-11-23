@@ -19,6 +19,7 @@ from cidan.agents.amendment_alignment import (
 )
 from cidan.config import get_settings
 from cidan.ingestion.retrieval import citation_for
+from cidan.ingestion.pdf_loader import normalize_clause_id
 from cidan.models import Citation, Obligation, StrictModel
 from cidan.services import agent1_storage
 
@@ -177,7 +178,8 @@ def extract_numeric_expressions(text: str) -> list[dict[str, Any]]:
 def detect_clause_gaps(clause_ids: list[str]) -> list[str]:
     """Detect missing sequential clauses such as 2.1, 2.2, 2.4 (missing 2.3)."""
     parsed: dict[tuple[int, ...], str] = {}
-    for cid in clause_ids:
+    for raw_cid in clause_ids:
+        cid = normalize_clause_id(raw_cid)
         parts = []
         is_num = True
         for p in cid.split("."):
@@ -496,28 +498,30 @@ def run(documents: list, llm_call=None, workflow_id: str | None = None) -> list[
                     if doc.metadata.get("chunk_id") == candidate.source_chunk_id
                 ), None)
 
-                # Bad chunk_id recovery: resolve by matching quote against batch chunks
-                review_reasons = []
                 if source_doc is None:
-                    for doc in active_passages:
-                        ver, _, _, _, _ = verify_quote(candidate.supporting_excerpt, doc.page_content)
-                        if ver:
-                            source_doc = doc
-                            break
-
-                if source_doc is None:
-                    source_doc = active_passages[0]
-                    review_reasons.append(
-                        f"Model emitted invalid chunk_id '{candidate.source_chunk_id}'; defaulted to {source_doc.metadata.get('chunk_id')}."
+                    raise ValueError(
+                        f"Candidate source_chunk_id '{candidate.source_chunk_id}' does not identify a retrieved circular passage."
                     )
+
+                review_reasons = []
 
                 # 1. Exact / Fuzzy Quote Verification and character offsets
                 ver_ok, preserved_excerpt, start_char, end_char, ver_status = verify_quote(
                     candidate.supporting_excerpt, source_doc.page_content
                 )
+                if not ver_ok:
+                    preserved_excerpt = source_doc.page_content
+                    ambiguity_msg = (
+                        f"Candidate supporting_excerpt '{candidate.supporting_excerpt}' "
+                        f"was not verbatim in cited chunk; fell back to chunk context."
+                    )
+                    candidate.ambiguities.append(ambiguity_msg)
+                    review_reasons.append(ambiguity_msg)
+                    ver_status = "unverified"
 
                 # 2. Token-boundary Clause ID check
-                clause_id = candidate.clause_id or source_doc.metadata.get("clause_id", "not_specified")
+                raw_clause_id = candidate.clause_id or source_doc.metadata.get("clause_id", "not_specified")
+                clause_id = normalize_clause_id(raw_clause_id)
                 clause_verified = is_clause_in_text(clause_id, source_doc.page_content)
                 if not clause_verified and clause_id != "not_specified":
                     review_reasons.append(f"Clause {clause_id} was not found with token boundary in cited chunk.")
@@ -539,7 +543,7 @@ def run(documents: list, llm_call=None, workflow_id: str | None = None) -> list[
                     text=candidate.text,
                     relationships=relationships,
                     baseline_docs=baseline_docs,
-                    table_cell_text=source_doc.page_content if source_doc.metadata.get("chunk_kind") == "table_row" else None,
+                    table_cell_text=source_doc.page_content if (source_doc.metadata.get("chunk_kind") == "table_row" or "[TABLE" in source_doc.page_content) else None,
                     model_proposal=candidate.model_dump(),
                 )
 
@@ -555,6 +559,10 @@ def run(documents: list, llm_call=None, workflow_id: str | None = None) -> list[
                     baseline_match=(prev_req is not None or relationships.get("mode") == "standalone"),
                     ambiguity_count=len(candidate.ambiguities) + len(review_reasons),
                 )
+                if not ver_ok:
+                    evidence_conf = min(evidence_conf, 0.5)
+                if not threshold_verified:
+                    evidence_conf = min(evidence_conf, 0.4)
 
                 page_num = int(source_doc.metadata.get("page", candidate.page_number or 1))
                 filename = source_doc.metadata.get("filename", "")
@@ -638,12 +646,20 @@ def run(documents: list, llm_call=None, workflow_id: str | None = None) -> list[
 
     all_detected_clauses = set()
     for doc in passages:
-        cids = doc.metadata.get("clause_ids") or [doc.metadata.get("clause_id")]
+        cids = doc.metadata.get("clause_ids")
+        if not cids and "detected_clauses" in doc.metadata:
+            det = doc.metadata["detected_clauses"]
+            if isinstance(det, list):
+                cids = det
+            elif isinstance(det, str) and det != "none":
+                cids = [c.strip() for c in det.split(",") if c.strip()]
+        if not cids:
+            cids = [doc.metadata.get("clause_id")]
         for c in cids:
             if c and c != "not_specified":
-                all_detected_clauses.add(c)
+                all_detected_clauses.add(normalize_clause_id(c))
 
-    clauses_with_obls = sorted({o.clause_id for o in obligations if o.clause_id != "not_specified"})
+    clauses_with_obls = sorted({normalize_clause_id(o.clause_id) for o in obligations if o.clause_id and o.clause_id != "not_specified"})
     candidate_misses = sorted(all_detected_clauses - set(clauses_with_obls))
     missing_clause_gaps = detect_clause_gaps(clauses_with_obls)
 

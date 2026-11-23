@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.documents import Document
 from cidan.models import Citation
 from cidan.ingestion.retrieval import citation_for
+from cidan.ingestion.pdf_loader import normalize_clause_id, detect_clause_ids
 
 logger = logging.getLogger(__name__)
 
@@ -86,12 +87,13 @@ def diff_values(old_text: str, new_text: str) -> list[dict[str, Any]]:
 
 
 def detect_document_relationships(documents: list[Document]) -> dict[str, Any]:
-    """Detect relationships between documents (amendment to baseline, or standalone).
+    """Detect relationships between documents (amendment to baseline, unrelated, or standalone).
 
     Decided by:
     (a) explicit references (title, reference number, 'amends'),
     (b) date ordering,
-    (c) similarity between titles and clause texts.
+    (c) clause-level overlap and content similarity.
+    Does not classify documents as amendments merely because a baseline exists.
     """
     baseline_types = ("baseline_policy", "policy_handbook")
     regulatory_types = ("amendment", "circular", "standalone_document", "unknown")
@@ -108,28 +110,54 @@ def detect_document_relationships(documents: list[Document]) -> dict[str, Any]:
             "evidence": "No baseline policy document provided in input documents.",
         }
 
-    # Detect explicit links
+    # Extract all baseline clauses
+    baseline_clauses = set()
+    for b in baseline_docs:
+        cids = b.metadata.get("clause_ids") or detect_clause_ids(b.page_content)
+        for c in cids:
+            if c and c != "not_specified":
+                baseline_clauses.add(normalize_clause_id(c))
+
+    # Baseline titles & references from filename and page 1 content
+    baseline_titles = set()
+    for b in baseline_docs:
+        fn = b.metadata.get("filename", "")
+        if fn:
+            base_stem = fn.split(".")[0].lower().replace("_", " ")
+            baseline_titles.add(base_stem)
+        if b.page_content:
+            first_lines = [normalize_text(line).lower() for line in b.page_content.split("\n")[:6] if len(line.strip()) > 5]
+            for l in first_lines:
+                if not any(k in l for k in ("draft", "confidential", "table of contents", "page", "reference:")):
+                    baseline_titles.add(l)
+
     links = []
     baseline_names = {d.metadata.get("filename", "") for d in baseline_docs}
     baseline_id = baseline_docs[0].metadata.get("document_id")
 
+    has_explicit_title_ref = False
+    has_amendment_phrasing = False
+    matching_clauses_count = 0
+
     for reg_doc in regulatory_docs:
         fn = reg_doc.metadata.get("filename", "")
-        content_sample = reg_doc.page_content[:3000].lower()
+        content_sample = reg_doc.page_content[:4000].lower()
+        reg_norm = normalize_text(reg_doc.page_content).lower()
 
-        # Check explicit reference
-        for b_name in baseline_names:
-            base_stem = b_name.split(".")[0].lower()
-            if base_stem in content_sample:
+        # 1. Check explicit title or filename reference
+        for b_title in baseline_titles:
+            if b_title and len(b_title) >= 6 and (b_title in content_sample or b_title in reg_norm):
+                has_explicit_title_ref = True
                 links.append({
                     "amendment_doc": fn,
-                    "baseline_doc": b_name,
+                    "baseline_doc": list(baseline_names)[0],
                     "link_type": "explicit_title_reference",
-                    "evidence": f"Found reference to {b_name} in {fn}",
+                    "evidence": f"Found reference to '{b_title}' in {fn}",
                 })
 
-        # Check amends phrasing
-        if any(w in content_sample for w in ("amends", "supersedes", "in supersession of", "read together with")):
+        # 2. Check explicit modification phrasing
+        if any(w in content_sample for w in ("amends", "supersedes", "in supersession of", "read together with", "shall be substituted", "hereby modified")):
+            has_amendment_phrasing = True
             links.append({
                 "amendment_doc": fn,
                 "baseline_doc": list(baseline_names)[0],
@@ -137,30 +165,96 @@ def detect_document_relationships(documents: list[Document]) -> dict[str, Any]:
                 "evidence": f"Found explicit modification phrasing in {fn}",
             })
 
+        # 3. Check clause overlap
+        reg_cids = reg_doc.metadata.get("clause_ids") or detect_clause_ids(reg_doc.page_content)
+        norm_reg_cids = {normalize_clause_id(c) for c in reg_cids if c and c != "not_specified"}
+        overlapping = norm_reg_cids.intersection(baseline_clauses)
+        if overlapping:
+            matching_clauses_count += len(overlapping)
+            links.append({
+                "amendment_doc": fn,
+                "baseline_doc": list(baseline_names)[0],
+                "link_type": "clause_overlap",
+                "evidence": f"Shared clause identifiers: {sorted(overlapping)}",
+            })
+
+    # Decision logic based on evidence strength
+    is_amendment_doc = any(d.metadata.get("document_type") == "amendment" for d in regulatory_docs)
+    if has_explicit_title_ref or (has_amendment_phrasing and matching_clauses_count >= 1) or matching_clauses_count >= 2 or (is_amendment_doc and matching_clauses_count >= 1):
+        return {
+            "has_baseline": True,
+            "mode": "amendment",
+            "relationships": links,
+            "baseline_doc_id": baseline_id,
+            "baseline_doc_count": len(baseline_docs),
+            "evidence": f"Linked regulatory amendment to baseline with {len(links)} signals (explicit={has_explicit_title_ref}, phrasing={has_amendment_phrasing}, clause_overlap={matching_clauses_count}).",
+        }
+    elif has_amendment_phrasing or matching_clauses_count == 1:
+        # Weak / ambiguous signals: return NEEDS_REVIEW
+        return {
+            "has_baseline": False,
+            "mode": "NEEDS_REVIEW",
+            "relationships": links,
+            "baseline_doc_id": baseline_id,
+            "baseline_doc_count": len(baseline_docs),
+            "evidence": "Ambiguous relationship: weak signals detected but insufficient explicit or clause-level evidence to confirm amendment.",
+        }
+    else:
+        # No connection between documents
+        return {
+            "has_baseline": False,
+            "mode": "unrelated",
+            "relationships": [],
+            "baseline_doc_id": None,
+            "baseline_doc_count": len(baseline_docs),
+            "evidence": "Documents are unrelated: no title references, amendment phrasing, or clause overlaps found.",
+        }
+
+
+def extract_table_positions(row_text: str) -> dict[str, str | None]:
+    """Extract clause, previous-position, amended-position, and change status from a table row line."""
+    if not row_text or not (row_text.startswith("[TABLE ") and " ROW " in row_text):
+        return {"clause": None, "previous": None, "amended": None, "change": None}
+
+    cells_str = row_text.split("]", 1)[-1].strip()
+    cells = [c.strip() for c in cells_str.split("|")]
+    parsed: dict[str, str] = {}
+    for cell in cells:
+        if "=" in cell:
+            col, val = cell.split("=", 1)
+            parsed[col.strip().lower()] = val.strip()
+
+    clause_val = None
+    prev_val = None
+    amended_val = None
+    change_val = None
+
+    for col, val in parsed.items():
+        if any(k in col for k in ("clause", "section", "ref", "para")):
+            clause_val = val
+        if (
+            any(k in col for k in ("exist", "prev", "earlier", "old", "baseline", "original", "prior"))
+            or ("position" in col and not any(k in col for k in ("amend", "revis", "new")))
+            or ("202" in col and any(k in col for k in ("position", "baseline", "requirement")) and not any(k in col for k in ("amend", "revis", "new")))
+        ):
+            prev_val = val
+        if any(k in col for k in ("revis", "amend", "new", "proposed", "updated", "modified")):
+            amended_val = val
+        if any(k in col for k in ("change", "classification", "status")):
+            change_val = val
+
     return {
-        "has_baseline": True,
-        "mode": "amendment",
-        "relationships": links,
-        "baseline_doc_id": baseline_id,
-        "baseline_doc_count": len(baseline_docs),
-        "evidence": f"Linked regulatory amendment to baseline with {len(links)} signals",
+        "clause": clause_val,
+        "previous": prev_val,
+        "amended": amended_val,
+        "change": change_val,
     }
 
 
 def _find_table_old_position(text: str) -> str | None:
     """Check if row format contains an old/existing column generically."""
-    if not (text.startswith("[TABLE ") and " ROW " in text):
-        return None
-    # Parse cells e.g. [TABLE t1 ROW 1] Col1=Val1 | Col2=Val2
-    cells_str = text.split("]", 1)[-1].strip()
-    cells = [c.strip() for c in cells_str.split("|")]
-    for cell in cells:
-        if "=" in cell:
-            col, val = cell.split("=", 1)
-            col_lower = col.strip().lower()
-            if any(k in col_lower for k in ("exist", "prev", "earlier", "old", "current", "baseline")):
-                return val.strip()
-    return None
+    pos = extract_table_positions(text)
+    return pos.get("previous")
 
 
 def align_obligation(
@@ -174,28 +268,69 @@ def align_obligation(
     """Deterministically align an obligation against baseline documents.
 
     Returns (classification, previous_requirement, baseline_citation).
-    If no baseline is available, ALWAYS returns ('NEW', None, None).
+    If no baseline is available or documents are unrelated, returns ('NEW', None, None).
+    If relationship is ambiguous (NEEDS_REVIEW), returns ('NEEDS_REVIEW', None, None).
     """
-    if not relationships.get("has_baseline", False):
+    if relationships.get("mode") == "NEEDS_REVIEW":
+        return "NEEDS_REVIEW", None, None
+
+    if not relationships.get("has_baseline", False) or relationships.get("mode") in ("standalone", "unrelated"):
         return "NEW", None, None
 
-    # 1. Check table old-position column
-    old_position = _find_table_old_position(text)
-    if old_position:
-        norm_old = normalize_text(old_position)
-        norm_new = normalize_text(text)
-        if norm_old == norm_new:
-            return "UNCHANGED", old_position, None
-        else:
-            return "MODIFIED", old_position, None
+    # 1. Check table positions using table_cell_text (or text if table-formatted)
+    target_table_text = table_cell_text if (table_cell_text and table_cell_text.startswith("[TABLE ")) else (text if text.startswith("[TABLE ") else None)
+    if target_table_text:
+        table_pos = extract_table_positions(target_table_text)
+        old_position = table_pos.get("previous")
+        new_position = table_pos.get("amended") or text
+        effective_clause = normalize_clause_id(table_pos.get("clause") or clause_id)
+        explicit_change = table_pos.get("change")
+
+        # Find matching baseline citation
+        base_citation = None
+        if baseline_docs:
+            for b_doc in baseline_docs:
+                if effective_clause and effective_clause != "not_specified":
+                    b_content = b_doc.page_content
+                    escaped_c = re.escape(effective_clause)
+                    if re.search(rf"(?<![\d.]){escaped_c}(?![\d])", b_content, re.IGNORECASE):
+                        base_citation = citation_for(b_doc)
+                        break
+                if old_position and old_position in b_doc.page_content:
+                    base_citation = citation_for(b_doc)
+                    break
+
+        if explicit_change:
+            up_change = explicit_change.upper()
+            if "NEW" in up_change:
+                return "NEW", old_position, base_citation
+            elif "MODIF" in up_change:
+                return "MODIFIED", old_position, base_citation
+            elif "UNCHANG" in up_change:
+                return "UNCHANGED", old_position, base_citation
+            elif "SUPERSED" in up_change:
+                return "SUPERSEDED", old_position, base_citation
+
+        if old_position:
+            norm_old = normalize_text(old_position)
+            norm_new = normalize_text(new_position)
+
+            if any(p in norm_old.lower() for p in ("no separate", "none", "not applicable", "n/a", "no existing")):
+                return "NEW", old_position, base_citation
+
+            if any(w in norm_new.lower() for w in ("deleted", "omitted", "repealed", "shall be omitted", "superseded")):
+                return "SUPERSEDED", old_position, base_citation
+
+            if norm_old == norm_new:
+                return "UNCHANGED", old_position, base_citation
+            else:
+                return "MODIFIED", old_position, base_citation
 
     # 2. Check baseline documents
     if not baseline_docs:
         return "NEW", None, None
 
-    # Look for matching baseline chunk
-    # Do NOT assume clause numbers alone equal matching requirements.
-    clean_clause = clause_id.strip().lower()
+    clean_clause = normalize_clause_id(clause_id).strip().lower()
     norm_new = normalize_text(text)
 
     best_match_doc = None
@@ -208,7 +343,6 @@ def align_obligation(
         # Check clause id match
         has_clause = False
         if clean_clause and clean_clause != "not_specified":
-            # Word boundary check
             escaped_cid = re.escape(clean_clause)
             if re.search(rf"(?<![\d.]){escaped_cid}(?![\d])", b_content, re.IGNORECASE):
                 has_clause = True
@@ -233,7 +367,6 @@ def align_obligation(
             if cand_prev and cand_prev in best_match_doc.page_content:
                 prev_req_text = cand_prev
             elif cand_prev:
-                # Fuzzy verify in baseline
                 s_cand = difflib.SequenceMatcher(None, normalize_text(cand_prev), base_norm)
                 if s_cand.ratio() >= 0.85:
                     prev_req_text = cand_prev
@@ -250,7 +383,6 @@ def align_obligation(
         return "MODIFIED", prev_req_text, cit
 
     # No baseline match found
-    # If the model proposed MODIFIED or UNCHANGED without a baseline match, downgrade
     if model_proposal and model_proposal.get("change_classification") in ("MODIFIED", "UNCHANGED"):
         return "NEEDS_REVIEW", None, None
 

@@ -4,7 +4,7 @@ from typing import Any
 
 from langchain_core.documents import Document
 
-from cidan.ingestion.pdf_loader import detect_clauses_with_hierarchy
+from cidan.ingestion.pdf_loader import detect_clauses_with_hierarchy, normalize_clause_id
 
 
 def _split_long_text(text: str, max_size: int) -> list[str]:
@@ -162,13 +162,15 @@ def split_documents(
 
             # Match clauses inside this piece
             piece_cids = [c for c in cids if c in piece]
-            primary_cid = piece_cids[0] if piece_cids else (cids[0] if cids else "not_specified")
+            raw_primary = piece_cids[0] if piece_cids else (cids[0] if cids else "not_specified")
+            primary_cid = normalize_clause_id(raw_primary)
+            norm_cids = [normalize_clause_id(c) for c in (piece_cids or cids)]
 
             chunk_meta = dict(meta)
             chunk_meta.update({
                 "chunk_id": cid_str,
                 "clause_id": primary_cid,
-                "clause_ids": piece_cids or cids,
+                "clause_ids": norm_cids,
                 "parent_clause_id": parent_cid,
                 "chunk_kind": kind,
                 "page_start": page_num,

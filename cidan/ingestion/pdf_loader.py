@@ -37,10 +37,21 @@ def classify_document(path: Path, sample_text: str = "") -> str:
     return str(res["document_type"])
 
 
+def normalize_clause_id(cid: str) -> str:
+    """Standardizes clause identifiers so 'Clause 2.1', 'clause 2.1', '2.1', '2.1 Eligibility' all normalize to '2.1'."""
+    if not cid:
+        return "not_specified"
+    cid = str(cid).strip()
+    m = re.match(r"^(?:(?:Clause|Section|Para(?:graph)?)\s*(?:=|:|\s)\s*)?([0-9]+(?:\.[0-9]+)*)(?:[\s:].*)?$", cid, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return cid
+
+
 def detect_clause_ids(text: str) -> list[str]:
     """Identify clause and subclause numbers (e.g., 2.1, 2.5, Clause 3.2)."""
     hierarchy = detect_clauses_with_hierarchy(text)
-    return [item["clause_id"] for item in hierarchy]
+    return [normalize_clause_id(item["clause_id"]) for item in hierarchy]
 
 
 def detect_clauses_with_hierarchy(text: str) -> list[dict[str, Any]]:
@@ -49,9 +60,9 @@ def detect_clauses_with_hierarchy(text: str) -> list[dict[str, Any]]:
     and compute parent/child hierarchy.
     """
     patterns = [
-        (r"\bClause\s*([0-9]+(?:\.[0-9]+)*)\b", "clause", True),
-        (r"\bArticle\s*([0-9]+(?:\([0-9a-zA-Z]+\))*)(?=[.,;:\s]|$)", "article", True),
-        (r"\bAnnex(?:ure)?\s*([A-Za-z0-9]+)\b", "annex", True),
+        (r"\b(?:Clause|Section|Para(?:graph)?)\s*(?:=|:|\s)\s*([0-9]+(?:\.[0-9]+)*)\b", "clause", False),
+        (r"\bArticle\s*(?:=|:|\s)?\s*([0-9]+(?:\([0-9a-zA-Z]+\))*)(?=[.,;:\s]|$)", "article", True),
+        (r"\bAnnex(?:ure)?\s*(?:=|:|\s)?\s*([A-Za-z0-9]+)\b", "annex", True),
         (r"(?:^|\n)\s*([0-9]+\.[0-9]+(?:\.[0-9]+)*)\b", "numbered", False),
         (r"(?:^|\n)\s*(\([a-z]\))(?=\s|$)", "alpha_subclause", False),
         (r"(?:^|\n)\s*(\([ivxlcdm]+\))(?=\s|$)", "roman_subclause", False),
@@ -62,7 +73,7 @@ def detect_clauses_with_hierarchy(text: str) -> list[dict[str, Any]]:
         for m in re.finditer(pattern, text, re.IGNORECASE):
             full = m.group(0).strip()
             cid = full if keep_prefix else m.group(1).strip()
-            found_matches.append((m.start(), cid, full, kind))
+            found_matches.append((m.start(), normalize_clause_id(cid), full, kind))
 
     # Sort matches by appearance in text
     found_matches.sort(key=lambda x: x[0])
@@ -80,7 +91,7 @@ def detect_clauses_with_hierarchy(text: str) -> list[dict[str, Any]]:
 
     for cid, full, kind in unique_matches:
         parent_id = None
-        if kind == "numbered":
+        if kind in ("numbered", "clause"):
             parts = cid.split(".")
             if len(parts) > 1:
                 parent_candidate = ".".join(parts[:-1])
@@ -386,6 +397,7 @@ def load_pdf(path: Path, max_bytes: int = 25 * 1024 * 1024) -> list[Document]:
                         "has_tables": table_count > 0,
                         "table_count": table_count,
                         "tables": structured_tables,
+                        "clause_ids": clauses,
                         "detected_clauses": ", ".join(clauses) if clauses else "none",
                         "is_scanned": is_scanned,
                         "ocr_status": ocr_status,
