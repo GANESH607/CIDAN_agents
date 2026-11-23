@@ -32,6 +32,10 @@ def ingest(settings: Settings | None = None) -> dict[str, object]:
         previous_ids = previous.get("ids", [])
         if previous_ids:
             store.delete(ids=previous_ids)
+    # Filter complex metadata (nested dicts/lists) before upserting to Chroma
+    from langchain_community.vectorstores.utils import filter_complex_metadata
+    for chunk in chunks:
+        chunk.metadata = filter_complex_metadata([chunk])[0].metadata
     store.add_documents(chunks, ids=ids)
     manifest_path = active.chroma_persist_directory.parent / "ingestion_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
