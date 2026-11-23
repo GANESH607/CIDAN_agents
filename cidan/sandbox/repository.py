@@ -169,6 +169,23 @@ def mark_manual_review(suite_id: str, reason: str) -> None:
         _history(connection, suite_id, "manual_review_required", {"reason": reason[:2000]})
 
 
+def mark_execution_failed(suite_id: str, reason: str) -> None:
+    initialize()
+    with _connect() as connection:
+        cursor = connection.execute(
+            "UPDATE sandbox_test_suites SET status = 'execution_failed', failure_reason = ? WHERE suite_id = ?",
+            (reason[:2000], suite_id),
+        )
+        if cursor.rowcount == 0:
+            raise FileNotFoundError(f"Sandbox suite not found: {suite_id}")
+        _history(
+            connection,
+            suite_id,
+            "execution_failed",
+            {"reason": reason[:2000]},
+        )
+
+
 def load_suite(suite_id: str) -> dict[str, Any]:
     initialize()
     with _connect() as connection:
@@ -264,9 +281,23 @@ def save_execution(
     initialize()
     suite = load_suite(suite_id)
     statuses = [result.status for result in results]
-    status = "completed" if results and all(item == "passed" for item in statuses) else (
-        "execution_pending" if not results or "pending" in statuses else "execution_failed"
-    )
+    if "failed" in statuses or any(item.passed is False for item in regressions):
+        status = "execution_failed"
+    elif (
+        not results
+        or "pending" in statuses
+        or len(regressions) != len(results)
+        or any(item.passed is None for item in regressions)
+    ):
+        status = "execution_pending"
+    elif (
+        len(results) == 50
+        and all(item == "passed" for item in statuses)
+        and all(item.passed is True for item in regressions)
+    ):
+        status = "completed"
+    else:
+        status = "execution_failed"
     with _connect() as connection:
         connection.execute(
             "UPDATE sandbox_test_suites SET status = ? WHERE suite_id = ?",

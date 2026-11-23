@@ -24,12 +24,30 @@ def write_workflow(directory, status):
     (directory / "workflow-1.json").write_text(json.dumps(data), encoding="utf-8")
 
 
-def test_approval_requires_validation_and_reviewer(tmp_path, monkeypatch):
+def test_draft_approval_requires_completed_validation_and_reviewer(tmp_path, monkeypatch):
     monkeypatch.setattr(persistence, "WORKFLOWS_DIR", tmp_path / "workflows")
     monkeypatch.setattr(persistence, "AUDIT_PATH", tmp_path / "audit.jsonl")
     write_workflow(tmp_path / "workflows", "draft")
-    with pytest.raises(ValueError, match="successful validation"):
+    path = tmp_path / "workflows" / "workflow-1.json"
+    workflow = json.loads(path.read_text(encoding="utf-8"))
+    workflow["tests"] = [{"failed": 1, "invalid": 0, "total": 1, "passed": 0}]
+    path.write_text(json.dumps(workflow), encoding="utf-8")
+    with pytest.raises(ValueError, match="Reviewer identifier"):
+        approve_rule("draft-1", "")
+    with pytest.raises(ValueError, match="executed, passing validation tests"):
         approve_rule("draft-1", "reviewer-7")
+
+
+def test_validated_draft_stays_unapproved_until_human_approval(tmp_path, monkeypatch):
+    monkeypatch.setattr(persistence, "WORKFLOWS_DIR", tmp_path / "workflows")
+    monkeypatch.setattr(persistence, "AUDIT_PATH", tmp_path / "audit.jsonl")
+    write_workflow(tmp_path / "workflows", "draft")
+    monkeypatch.setattr(approval_service, "_require_successful_sandbox", lambda *_args: None)
+
+    approved = approve_rule("draft-1", "reviewer-7", "Reviewed local test results.")
+
+    assert approved["status"] == "approved_for_export"
+    assert approved["approval"]["reviewer_id"] == "reviewer-7"
 
 
 def test_approval_is_audited_after_sandbox_gate(tmp_path, monkeypatch):

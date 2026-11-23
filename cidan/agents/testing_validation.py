@@ -22,6 +22,14 @@ def run(
         review_reasons.append("The rule proposal has no traceable change ID.")
     if baseline is None or proposed is None:
         review_reasons.append("No deterministic baseline/proposed rule pair is supported by evidence.")
+    elif not any(
+        not isinstance(condition.value, bool)
+        and isinstance(condition.value, (int, float))
+        for condition in [*baseline.conditions, *proposed.conditions]
+    ):
+        review_reasons.append(
+            "The rules do not provide numeric thresholds for grounded boundary and edge tests."
+        )
     if not rule.unrelated_product_types and not unrelated_product_types:
         review_reasons.append("No evidence-backed unrelated products are available for regression tests.")
     if proposed and (proposed.rule_id != rule.rule_id or proposed.version != rule.version):
@@ -82,11 +90,32 @@ def run(
         llm_call=llm_call,
     )
     report = sandbox_service.run_suite(generated["suite_id"])
-    results = [
-        TestResult(
+    regressions_by_test = {
+        item["test_id"]: item for item in report["regression_results"]
+    }
+    results = []
+    combined_statuses = []
+    for item in report["execution_results"]:
+        regression = regressions_by_test.get(item["test_id"])
+        if item["status"] == "failed" or (
+            regression is not None and regression["passed"] is False
+        ):
+            status = "failed"
+        elif item["status"] == "pending" or regression is None or regression["passed"] is None:
+            status = "pending"
+        else:
+            status = "passed"
+        messages = [
+            message for message in (
+                item["failure_reason"],
+                regression["detail"] if regression and status != "passed" else None,
+                "Regression analysis is missing." if regression is None else None,
+            ) if message
+        ]
+        results.append(TestResult(
             transaction_id=item["test_id"],
             rule_id=item["rule_id"],
-            passed=item["status"] == "passed",
+            passed=status == "passed",
             expected={
                 "old": item["expected_old_result"],
                 "proposed": item["expected_proposed_result"],
@@ -95,20 +124,19 @@ def run(
                 "old": item["actual_old_result"],
                 "proposed": item["actual_proposed_result"],
             },
-            message=item["failure_reason"] or "Both rule versions matched expected results.",
-        )
-        for item in report["execution_results"]
-    ]
-    passed = report["passed"]
-    failed = report["failed"]
-    pending = report["pending"]
+            message=" ".join(messages) or "Both rule versions and regression checks passed.",
+        ))
+        combined_statuses.append(status)
+    passed = combined_statuses.count("passed")
+    failed = combined_statuses.count("failed")
     total = report["total_generated"]
+    pending = total - passed - failed
     return TestSummary(
         total=total,
         passed=passed,
         failed=failed,
         skipped=0,
-        invalid=pending,
+        invalid=0,
         pending=pending,
         pass_rate=passed / total if total else None,
         results=results,

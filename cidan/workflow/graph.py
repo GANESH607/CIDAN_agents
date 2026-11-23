@@ -120,14 +120,7 @@ def build_graph() -> Any:
                 summary = testing_validation.run(proposal_model)
                 summaries.append(summary)
                 updated = dict(proposal_data)
-                updated["status"] = (
-                    "validated"
-                    if summary.total == 50
-                    and summary.failed == 0
-                    and summary.invalid == 0
-                    and summary.pending == 0
-                    else "draft"
-                )
+                updated["status"] = "draft"
                 tested.append(updated)
                 if summary.sandbox_suite_id:
                     from cidan.sandbox.service import get_suite

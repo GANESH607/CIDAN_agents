@@ -73,7 +73,11 @@ def _category_guidance(
     if category == "boundary_value":
         boundary_values: dict[str, set[int | float]] = {}
         for condition in [*old_rule.conditions, *proposed_rule.conditions]:
-            if condition.operator in {"gt", "gte", "lt", "lte", "between"}:
+            if condition.operator in {"gt", "gte", "lt", "lte", "between", "eq", "ne"}:
+                if isinstance(condition.value, bool) or not isinstance(
+                    condition.value, (int, float)
+                ):
+                    continue
                 thresholds = [condition.value]
                 if condition.operator == "between":
                     thresholds.append(condition.upper_value)
@@ -87,9 +91,21 @@ def _category_guidance(
             f"{json.dumps({field: sorted(values) for field, values in boundary_values.items()})}."
         )
     if category == "edge_case":
+        thresholds_by_field: dict[str, list[int | float]] = {}
+        for condition in [*old_rule.conditions, *proposed_rule.conditions]:
+            if isinstance(condition.value, bool) or not isinstance(
+                condition.value, (int, float)
+            ):
+                continue
+            thresholds = [condition.value]
+            if condition.operator == "between":
+                thresholds.append(condition.upper_value)
+            thresholds_by_field.setdefault(condition.field, []).extend(thresholds)
         return (
-            "Use distinct meaningful numeric extremes around the supplied thresholds; "
-            "do not invent input fields or claim unsupported domain limits."
+            "Use a supplied numeric rule field and choose values more than one unit "
+            "below its lowest or above its highest supplied threshold. Thresholds by "
+            f"field: {json.dumps(thresholds_by_field)}. Do not invent input fields "
+            "or claim unsupported domain limits."
         )
     if category == "regression":
         return (
@@ -132,6 +148,14 @@ def generate_cases(
         raise ValueError("At least one known unrelated product is required for regression testing.")
     if any(item.casefold() == old_rule.product_type.casefold() for item in unrelated):
         raise ValueError("Unrelated products cannot include the rule's own product.")
+    if not any(
+        not isinstance(condition.value, bool)
+        and isinstance(condition.value, (int, float))
+        for condition in [*old_rule.conditions, *proposed_rule.conditions]
+    ):
+        raise ValueError(
+            "Numeric rule thresholds are required for boundary and edge-case tests."
+        )
 
     completed: list[TestCase] = []
     suite_token = uuid4().hex[:12]

@@ -4,6 +4,7 @@ Standalone Demonstration & Agent Observability Dashboard.
 """
 
 import json
+import sqlite3
 import textwrap
 from datetime import datetime
 from pathlib import Path
@@ -682,6 +683,194 @@ def get_agent3_dashboard_metrics(proposals: list[dict[str, Any]]) -> dict[str, i
         "high_risk_count": sum(1 for proposal in proposals if proposal.get("risk_level") == "high"),
         "action_count": len({proposal.get("action") for proposal in proposals if proposal.get("action")}),
     }
+
+
+def render_agent4_dashboard() -> None:
+    from cidan.sandbox import service as sandbox_service
+
+    st.subheader("Agent 4 – Test Case Generation and Sandbox Validation")
+    st.caption(
+        "Sandbox execution uses synthetic inputs and the deterministic rule engine; "
+        "rules are never executed in a banking system."
+    )
+
+    try:
+        suites = sandbox_service.list_suites()
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        st.error(f"Unable to load sandbox suites: {exc}")
+        return
+
+    if not suites:
+        st.info("No sandbox suites have been generated.")
+        columns = st.columns(6)
+        for column, label, value in zip(
+            columns,
+            ("Generated", "Passed", "Failed", "Pending", "Invalid", "Pass rate"),
+            ("0", "0", "0", "0", "0", "N/A"),
+        ):
+            column.metric(label, value)
+        return
+
+    suites_by_id = {suite["suite_id"]: suite for suite in suites}
+    suite_ids = list(suites_by_id)
+    selected_suite_id = st.selectbox(
+        "Sandbox suite",
+        suite_ids,
+        format_func=lambda suite_id: (
+            f"{suites_by_id[suite_id]['rule_id']} · "
+            f"{suites_by_id[suite_id]['status']} · {suite_id}"
+        ),
+    )
+    try:
+        report = sandbox_service.get_suite(selected_suite_id)
+        history = sandbox_service.get_history(selected_suite_id)
+    except (FileNotFoundError, OSError, ValueError, sqlite3.Error) as exc:
+        st.error(f"Unable to load sandbox suite `{selected_suite_id}`: {exc}")
+        return
+
+    cases = report.get("test_cases", [])
+    execution_results = report.get("execution_results", [])
+    regressions = report.get("regression_results", [])
+    passed = sum(1 for result in execution_results if result.get("status") == "passed")
+    failed = sum(1 for result in execution_results if result.get("status") == "failed")
+    invalid = sum(1 for result in execution_results if result.get("status") == "invalid")
+    pending = max(0, len(cases) - passed - failed - invalid)
+    executed = passed + failed
+    pass_percentage = passed / executed * 100 if executed else None
+
+    st.markdown(
+        f"**Suite status:** `{report.get('status', 'unknown')}`  |  "
+        f"**Rule:** `{report.get('rule_id', 'unknown')}`  |  "
+        f"**Change:** `{report.get('change_id', 'unknown')}`"
+    )
+    metric_columns = st.columns(6)
+    metrics = (
+        ("Generated", report.get("total_generated", len(cases))),
+        ("Passed", passed),
+        ("Failed", failed),
+        ("Pending", pending),
+        (
+            "Invalid",
+            "N/A" if report.get("status") == "generation_failed" else invalid,
+        ),
+        ("Pass rate", f"{pass_percentage:.1f}%" if pass_percentage is not None else "N/A"),
+    )
+    for column, (label, value) in zip(metric_columns, metrics):
+        column.metric(label, value)
+    st.caption(
+        "Generated cases are validated before storage; invalid cases are rejected "
+        "rather than executed."
+    )
+
+    if report.get("status") == "manual_review":
+        st.warning(
+            "Manual review is required: "
+            + (report.get("failure_reason") or "the rule evidence is insufficient.")
+        )
+    elif report.get("status") == "generation_failed":
+        st.error(
+            "Test generation failed: "
+            + (report.get("failure_reason") or "no validated suite was produced.")
+        )
+    elif report.get("status") == "execution_failed":
+        st.warning(
+            "Execution or regression validation failed; human review is required."
+        )
+    else:
+        st.caption(
+            "No manual-review flag is recorded by the suite; human approval remains "
+            "a separate required step."
+        )
+
+    st.markdown("#### Test Category Distribution")
+    distribution = report.get("category_distribution", {})
+    if distribution:
+        st.dataframe(
+            [{"Category": category, "Cases": count} for category, count in distribution.items()],
+            hide_index=True,
+            use_container_width=True,
+        )
+    else:
+        st.info("No test categories are available for this suite.")
+
+    results_by_test = {result["test_id"]: result for result in execution_results}
+    regressions_by_test = {result["test_id"]: result for result in regressions}
+    st.markdown("#### Individual Test Cases")
+    if not cases:
+        st.info("This suite has no persisted test cases.")
+    for case in cases:
+        test_id = case["test_id"]
+        result = results_by_test.get(test_id)
+        regression = regressions_by_test.get(test_id)
+        case_status = result.get("status", "pending") if result else "pending"
+        with st.expander(f"{test_id} · {case['category']} · {case_status}"):
+            st.markdown(f"**Scenario:** {case['scenario']}")
+            st.markdown(f"**Input data:**")
+            st.json(case["input_data"])
+            st.markdown(
+                f"**Expected behavior:** `{case.get('expected_outcome', 'N/A')}`"
+            )
+            result_columns = st.columns(2)
+            expected_results = {
+                "baseline": case.get("expected_old_result"),
+                "proposed": case.get("expected_proposed_result"),
+            }
+            actual_results = {
+                "baseline": result.get("actual_old_result") if result else None,
+                "proposed": result.get("actual_proposed_result") if result else None,
+            }
+            with result_columns[0]:
+                st.markdown("**Expected rule outcomes**")
+                st.json(expected_results)
+            with result_columns[1]:
+                st.markdown("**Actual rule outcomes**")
+                st.json(actual_results if result else "Not executed")
+            if result and result.get("failure_reason"):
+                st.error(result["failure_reason"])
+            if regression:
+                st.markdown(
+                    f"**Regression:** `{regression.get('category', 'unknown')}` — "
+                    f"{'passed' if regression.get('passed') is True else 'failed' if regression.get('passed') is False else 'pending'}"
+                )
+                st.caption(regression.get("detail", ""))
+
+    failed_cases = [
+        result for result in execution_results if result.get("status") == "failed"
+    ]
+    pending_cases = [
+        result for result in execution_results if result.get("status") == "pending"
+    ]
+    failed_regressions = [
+        result for result in regressions if result.get("passed") is not True
+    ]
+    st.markdown("#### Failed Cases and Regression Checks")
+    if not failed_cases and not failed_regressions:
+        st.info("No failed execution or regression checks are recorded.")
+    for result in failed_cases:
+        st.error(
+            f"{result['test_id']}: {result.get('failure_reason') or result['status']}"
+        )
+    for result in failed_regressions:
+        st.warning(f"{result['test_id']}: {result.get('detail', 'Regression check pending.')}")
+    if pending_cases:
+        st.info(f"{len(pending_cases)} test case(s) are pending execution.")
+
+    st.markdown("#### Suite Execution History")
+    if history:
+        st.dataframe(
+            [
+                {
+                    "Event": item["event"],
+                    "Timestamp": item["timestamp"],
+                    "Details": item["details"],
+                }
+                for item in history
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+    else:
+        st.info("No execution history is recorded for this suite.")
 
 
 def get_available_workflows() -> list[str]:
@@ -1962,7 +2151,5 @@ else:
                     pass
 
     elif selected_agent == "Agent 4 – Test Generation":
-        st.info(
-            f"Visual dashboard view for **{selected_agent}** is currently being enhanced. Please review Agent 1, Agent 2, or Agent 3 for complete multi-tab audit views, or inspect the generated JSON outputs directly in `workflow_outputs/{selected_workflow_id}/`."
-        )
+        render_agent4_dashboard()
                 

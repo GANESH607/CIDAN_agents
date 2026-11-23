@@ -39,7 +39,7 @@ def approve_rule(rule_id: str, reviewer_id: str, note: str = "") -> dict:
         for rule in workflow.get("proposals", []):
             if rule.get("rule_id") != rule_id:
                 continue
-            if rule.get("status") != "validated":
+            if rule.get("status") not in {"draft", "validated"}:
                 raise ValueError("Rule approval requires successful validation.")
             tests = workflow.get("tests", [])
             if not tests or any(test["failed"] or test["invalid"] for test in tests):

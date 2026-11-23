@@ -42,6 +42,16 @@ def _validate_relevance(
     unrelated = any(
         product.casefold() == item.casefold() for item in unrelated_product_types
     )
+    required = {
+        condition.field
+        for condition in [*old_rule.conditions, *new_rule.conditions]
+    }
+    unsupported_fields = set(case.input_data) - required - {"product_type"}
+    if unsupported_fields:
+        raise ValueError(
+            f"{case.test_id} contains unsupported input fields: "
+            f"{', '.join(sorted(unsupported_fields))}."
+        )
     if case.category == "regression":
         if same_product or not unrelated:
             raise ValueError(
@@ -58,10 +68,6 @@ def _validate_relevance(
     if not same_product:
         raise ValueError(f"{case.test_id} does not target the compared product.")
 
-    required = {
-        condition.field
-        for condition in [*old_rule.conditions, *new_rule.conditions]
-    }
     if case.category == "missing_data_exception":
         if all(
             field in case.input_data and case.input_data[field] is not None
@@ -98,6 +104,10 @@ def validate_case(
         for condition in [*old_rule.conditions, *new_rule.conditions]:
             if condition.field not in case.input_data:
                 continue
+            if isinstance(condition.value, bool) or not isinstance(
+                condition.value, (int, float)
+            ):
+                continue
             actual = case.input_data[condition.field]
             if isinstance(actual, bool) or not isinstance(actual, (int, float)):
                 continue
@@ -107,6 +117,27 @@ def validate_case(
             boundaries.extend(abs(actual - bound) <= 1 for bound in bounds)
         if not any(boundaries):
             raise ValueError(f"{case.test_id} is not near a rule threshold.")
+    if case.category == "edge_case":
+        thresholds_by_field: dict[str, list[int | float]] = {}
+        for condition in [*old_rule.conditions, *new_rule.conditions]:
+            if isinstance(condition.value, bool) or not isinstance(
+                condition.value, (int, float)
+            ):
+                continue
+            thresholds = [condition.value]
+            if condition.operator == "between":
+                thresholds.append(condition.upper_value)
+            thresholds_by_field.setdefault(condition.field, []).extend(thresholds)
+        extremes = []
+        for field, thresholds in thresholds_by_field.items():
+            actual = case.input_data.get(field)
+            if isinstance(actual, bool) or not isinstance(actual, (int, float)):
+                continue
+            extremes.append(actual < min(thresholds) - 1 or actual > max(thresholds) + 1)
+        if not any(extremes):
+            raise ValueError(
+                f"{case.test_id} is not an evidence-grounded numeric edge case."
+            )
     if case.category == "missing_data_exception" and (
         old.status not in {"missing_input", "invalid_input"}
         and new.status not in {"missing_input", "invalid_input"}
@@ -133,10 +164,15 @@ def validate_cases(
         raise ValueError("Test IDs must be unique.")
 
     scenarios_seen: set[str] = set()
+    scenario_descriptions_seen: set[str] = set()
     for case in cases:
         validate_case(case, old_rule, new_rule, unrelated_product_types)
         key = scenario_key(case)
         if key in scenarios_seen:
             raise ValueError("Test suite contains duplicate input scenarios.")
         scenarios_seen.add(key)
+        scenario_description = re.sub(r"\s+", " ", case.scenario).strip().casefold()
+        if scenario_description in scenario_descriptions_seen:
+            raise ValueError("Test suite contains duplicate scenario descriptions.")
+        scenario_descriptions_seen.add(scenario_description)
     return cases
