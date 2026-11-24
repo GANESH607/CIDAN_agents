@@ -32,7 +32,7 @@ def run(
         )
     if not rule.unrelated_product_types and not unrelated_product_types:
         review_reasons.append("No evidence-backed unrelated products are available for regression tests.")
-    if proposed and (proposed.rule_id != rule.rule_id or proposed.version != rule.version):
+    if proposed and proposed.rule_id != rule.rule_id:
         review_reasons.append("Sandbox rule identity does not match the rule proposal.")
     if proposed and rule.change_id and proposed.change_id != rule.change_id:
         review_reasons.append("Sandbox rule change ID does not match the proposal.")

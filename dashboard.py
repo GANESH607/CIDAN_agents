@@ -685,23 +685,136 @@ def get_agent3_dashboard_metrics(proposals: list[dict[str, Any]]) -> dict[str, i
     }
 
 
-def render_agent4_dashboard() -> None:
+def render_agent4_dashboard(workflow_id: str) -> None:
+    from cidan.agents import testing_validation
+    from cidan.models import RuleProposal
     from cidan.sandbox import service as sandbox_service
 
+    suite_select_key = f"agent4-suite-selection-{workflow_id}"
     st.subheader("Agent 4 – Test Case Generation and Sandbox Validation")
     st.caption(
         "Sandbox execution uses synthetic inputs and the deterministic rule engine; "
         "rules are never executed in a banking system."
     )
 
+    st.caption(f"Agent 3 proposal source: `{workflow_id}`")
     try:
-        suites = sandbox_service.list_suites()
+        proposals_data = agent3_storage.load_rule_proposals(workflow_id)
+        proposals = proposals_data.get("proposals", [])
+    except FileNotFoundError:
+        proposals = []
+        st.warning(f"No Agent 3 proposals are available for workflow `{workflow_id}`.")
+    except (OSError, ValueError) as exc:
+        st.error(f"Unable to load Agent 3 proposals for workflow `{workflow_id}`: {exc}")
+        return
+
+    try:
+        all_suites = sandbox_service.list_suites()
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        st.error(f"Unable to load sandbox suites: {exc}")
+        return
+    existing_suite_ids = {suite["suite_id"] for suite in all_suites}
+    run_attempted = False
+    generated_suite_id = None
+
+    ready_proposals = [
+        proposal
+        for proposal in proposals
+        if proposal.get("baseline_rule")
+        and proposal.get("sandbox_rule")
+        and proposal.get("change_id")
+    ]
+    if ready_proposals:
+        selected_proposal_index = st.selectbox(
+            "Agent 3 proposal",
+            list(range(len(ready_proposals))),
+            format_func=lambda index: (
+                f"{ready_proposals[index].get('rule_id', 'unknown')} · "
+                f"{ready_proposals[index].get('change_id', 'unknown')}"
+            ),
+        )
+        selected_proposal = ready_proposals[selected_proposal_index]
+        if st.button(
+            "Generate and run 50 synthetic tests",
+            type="primary",
+            key=f"agent4-run-{workflow_id}-{selected_proposal.get('rule_id')}",
+        ):
+            run_attempted = True
+            try:
+                proposal_fields = RuleProposal.model_fields
+                proposal = RuleProposal.model_validate({
+                    key: value
+                    for key, value in selected_proposal.items()
+                    if key in proposal_fields
+                })
+                with st.spinner("Generating and executing the validated sandbox suite..."):
+                    summary = testing_validation.run(proposal)
+                generated_suite_id = summary.sandbox_suite_id
+                if (
+                    summary.sandbox_suite_id
+                    and summary.total == 50
+                    and summary.passed == 50
+                    and summary.failed == 0
+                    and summary.pending == 0
+                ):
+                    st.success(
+                        f"Agent 4 recorded suite `{summary.sandbox_suite_id}`: "
+                        f"{summary.total} generated, {summary.passed} passed, "
+                        f"{summary.failed} failed, {summary.pending} pending."
+                    )
+                elif summary.sandbox_suite_id:
+                    st.warning(
+                        f"Suite `{summary.sandbox_suite_id}` needs review: "
+                        f"{summary.total} generated, {summary.passed} passed, "
+                        f"{summary.failed} failed, {summary.pending} pending."
+                    )
+                else:
+                    st.warning("Agent 4 did not produce a sandbox suite.")
+            except Exception as exc:
+                st.error(f"Agent 4 could not generate or run this suite: {exc}")
+
+    manual_review_proposals = [
+        proposal
+        for proposal in proposals
+        if not (
+            proposal.get("baseline_rule")
+            and proposal.get("sandbox_rule")
+            and proposal.get("change_id")
+        )
+    ]
+    for proposal in manual_review_proposals:
+        st.warning(
+            f"Proposal `{proposal.get('rule_id', 'unknown')}` has no complete "
+            "baseline/proposed rule pair and remains for human review."
+        )
+
+    try:
+        if run_attempted:
+            all_suites = sandbox_service.list_suites()
     except (OSError, ValueError, sqlite3.Error) as exc:
         st.error(f"Unable to load sandbox suites: {exc}")
         return
 
+    workflow_suite_keys = {
+        (
+            proposal.get("rule_id"),
+            proposal.get("change_id") or proposal.get("rule_id"),
+            (proposal.get("supporting_citations") or [{}])[0].get("document_id"),
+        )
+        for proposal in proposals
+    }
+    suites = [
+        suite
+        for suite in all_suites
+        if (
+            suite.get("rule_id"),
+            suite.get("change_id"),
+            suite.get("document_id"),
+        ) in workflow_suite_keys
+    ]
+
     if not suites:
-        st.info("No sandbox suites have been generated.")
+        st.info(f"No Agent 4 suites have been generated for workflow `{workflow_id}`.")
         columns = st.columns(6)
         for column, label, value in zip(
             columns,
@@ -713,6 +826,16 @@ def render_agent4_dashboard() -> None:
 
     suites_by_id = {suite["suite_id"]: suite for suite in suites}
     suite_ids = list(suites_by_id)
+    if generated_suite_id in suite_ids:
+        st.session_state[suite_select_key] = generated_suite_id
+    elif run_attempted:
+        newly_created_suites = [
+            suite for suite in suites if suite["suite_id"] not in existing_suite_ids
+        ]
+        if newly_created_suites:
+            st.session_state[suite_select_key] = newly_created_suites[0]["suite_id"]
+    if st.session_state.get(suite_select_key) not in suite_ids:
+        st.session_state[suite_select_key] = suite_ids[0]
     selected_suite_id = st.selectbox(
         "Sandbox suite",
         suite_ids,
@@ -720,6 +843,7 @@ def render_agent4_dashboard() -> None:
             f"{suites_by_id[suite_id]['rule_id']} · "
             f"{suites_by_id[suite_id]['status']} · {suite_id}"
         ),
+        key=suite_select_key,
     )
     try:
         report = sandbox_service.get_suite(selected_suite_id)
@@ -2151,5 +2275,5 @@ else:
                     pass
 
     elif selected_agent == "Agent 4 – Test Generation":
-        render_agent4_dashboard()
+        render_agent4_dashboard(selected_workflow_id)
                 

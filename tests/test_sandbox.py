@@ -17,6 +17,7 @@ from cidan.sandbox.schemas import (
     RegressionResult,
     SandboxRule,
 )
+from cidan.services.demo_seeder import seed_cidan_001_if_needed
 from cidan.sandbox.validation import scenario_key, validate_case, validate_cases
 
 
@@ -40,7 +41,7 @@ def make_candidate(category: str, index: int, old: SandboxRule, new: SandboxRule
     elif category == "negative":
         product, age = "personal_loan", 20 + index
     elif category == "boundary_value":
-        product, age = "personal_loan", (59, 60, 61, 69, 70, 71, 59, 60, 69, 70)[index]
+        product, age = "personal_loan", 59 + (index % 21) / 10
     elif category == "edge_case":
         product, age = "personal_loan", 0 if index % 2 == 0 else 120 + index
     elif category == "regression":
@@ -200,6 +201,35 @@ def test_generation_enforces_exact_distribution_unique_cases_and_ids():
     assert Counter(case.category for case in cases) == Counter(generation.CASE_DISTRIBUTION)
 
 
+def test_generation_replaces_duplicate_candidates_with_new_cases():
+    old, new = make_rule(1), make_rule(2, threshold=70)
+    generate = generated_candidates(old, new)
+    repeated = False
+    category_calls = Counter()
+
+    def duplicate_once(schema, system, prompt):
+        nonlocal repeated
+        category = re.search(r"category '([^']+)'", prompt).group(1)
+        category_calls[category] += 1
+        batch = generate(schema, system, prompt)
+        if category == "positive_normal" and not repeated:
+            batch.cases[-1] = batch.cases[0]
+            repeated = True
+        return batch
+
+    cases = generation.generate_cases(
+        old,
+        new,
+        unrelated_product_types=["credit_card"],
+        llm_call=duplicate_once,
+    )
+
+    assert len(cases) == 50
+    assert Counter(case.category for case in cases) == Counter(generation.CASE_DISTRIBUTION)
+    assert len({scenario_key(case) for case in cases}) == 50
+    assert category_calls["positive_normal"] == 3
+
+
 def test_groq_generation_uses_json_mode_for_case_batch(monkeypatch):
     old, new = make_rule(1), make_rule(2, threshold=70)
     fake = generated_candidates(old, new)
@@ -220,23 +250,31 @@ def test_groq_generation_uses_json_mode_for_case_batch(monkeypatch):
     assert methods and set(methods) == {"json_mode"}
 
 
-def test_generation_rejects_bad_counts_and_duplicate_scenarios():
+def test_generation_recovers_from_short_batches_and_rejects_duplicate_scenarios():
     old, new = make_rule(1), make_rule(2, threshold=70)
+    generate = generated_candidates(old, new)
+    short_batch_returned = False
+    category_calls = Counter()
 
-    def wrong_count(schema, _system, _prompt):
-        return schema(cases=[
-            make_candidate("positive_normal", 1, old, new),
-            make_candidate("positive_normal", 2, old, new),
-            make_candidate("positive_normal", 3, old, new),
-        ])
+    def short_batch(schema, system, prompt):
+        nonlocal short_batch_returned
+        category = re.search(r"category '([^']+)'", prompt).group(1)
+        category_calls[category] += 1
+        batch = generate(schema, system, prompt)
+        if category == "positive_normal" and not short_batch_returned:
+            short_batch_returned = True
+            return schema(cases=batch.cases[:3])
+        return batch
 
-    with pytest.raises(ValueError, match="expected 5"):
-        generation.generate_cases(
-            old,
-            new,
-            unrelated_product_types=["credit_card"],
-            llm_call=wrong_count,
-        )
+    cases = generation.generate_cases(
+        old,
+        new,
+        unrelated_product_types=["credit_card"],
+        llm_call=short_batch,
+    )
+    assert len(cases) == 50
+    assert Counter(case.category for case in cases) == Counter(generation.CASE_DISTRIBUTION)
+    assert category_calls["positive_normal"] == 3
 
     def duplicate(schema, _system, prompt):
         count = int(re.search(r"Generate exactly (\d+)", prompt).group(1))
@@ -522,6 +560,26 @@ def test_agent3_proposal_runs_through_agent4_validation(tmp_path, monkeypatch):
     assert all(result["passed"] is True for result in suite["regression_results"])
 
 
+def test_agent4_uses_nested_proposed_rule_version_for_execution(tmp_path, monkeypatch):
+    baseline, proposed = make_rule(1), make_rule(2, threshold=70)
+    proposal = _make_rule_proposal(baseline, proposed)
+    proposal.version = baseline.version
+    monkeypatch.setenv("OUTPUTS_DIRECTORY", str(tmp_path))
+
+    summary = testing_validation.run(
+        proposal,
+        llm_call=generated_candidates(baseline, proposed),
+    )
+
+    assert summary.total == 50
+    assert summary.passed == 50
+    assert summary.failed == 0
+    suite = service.get_suite(summary.sandbox_suite_id)
+    assert suite["status"] == "completed"
+    persisted_suite = repository.load_suite(summary.sandbox_suite_id)
+    assert persisted_suite["proposed_rule"]["version"] == proposed.version
+
+
 def test_agent4_records_manual_review_when_numeric_tests_are_unsupported(
     tmp_path, monkeypatch
 ):
@@ -654,10 +712,19 @@ def test_agent4_dashboard_reads_suite_results_from_sqlite(tmp_path, monkeypatch)
 
     import dashboard
 
+    seed_cidan_001_if_needed(force=True)
     baseline, proposed = make_rule(1), make_rule(2, threshold=70)
+    baseline = baseline.model_copy(update={
+        "rule_id": "RULE-2-5-SLA",
+        "change_id": "CHG-2-5",
+    })
+    proposed = proposed.model_copy(update={
+        "rule_id": "RULE-2-5-SLA",
+        "change_id": "CHG-2-5",
+    })
     monkeypatch.setenv("OUTPUTS_DIRECTORY", str(tmp_path))
     suite = service.generate_suite(
-        document_id="synthetic-document",
+        document_id="doc-amd-2026",
         change_id=proposed.change_id,
         baseline_rule=baseline,
         proposed_rule=proposed,

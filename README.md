@@ -101,6 +101,18 @@ IDs prevent duplicates. The persistent vector index is under `storage/chroma/`.
 Workflow state and local audit events are saved under `outputs/`; reports are under
 `outputs/reports/<workflow-id>/`.
 
+## Streamlit dashboard
+
+Start the dashboard with the project virtual environment so it uses the dependencies
+installed from `requirements.txt`:
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run dashboard.py
+```
+
+Avoid invoking a globally installed `streamlit.exe`; it may use a different Python
+environment without the project's LangChain dependencies.
+
 ## Docker and Render
 
 Build and run the API locally from the project root. Keep `.env` out of the image;

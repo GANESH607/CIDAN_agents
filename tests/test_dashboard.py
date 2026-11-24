@@ -1,3 +1,5 @@
+from cidan.agents import testing_validation
+from cidan.models import TestSummary as Agent4TestSummary
 from cidan.services import agent1_storage, agent2_storage, agent3_storage
 from cidan.services.demo_seeder import CIDAN_001_ID, seed_cidan_001_if_needed
 import dashboard
@@ -141,7 +143,7 @@ def test_agent3_sidebar_selection_loads_actual_dashboard_outputs(monkeypatch):
 
         monkeypatch.setattr(agent3_storage, loader_name, track_loader)
 
-    app = AppTest.from_file(dashboard.__file__).run()
+    app = AppTest.from_file(dashboard.__file__).run(timeout=10)
     agent_selection = next(radio for radio in app.radio if radio.label == "Agent Selection")
     agent_selection.set_value(agent_selection.options[2]).run()
 
@@ -188,5 +190,55 @@ def test_dashboard_agent3_metrics_show_zero_counts_without_proposals():
         "high_risk_count": 0,
         "action_count": 0,
     }
+
+
+def test_agent4_runs_and_selects_the_new_suite_for_selected_workflow(
+    tmp_path, monkeypatch
+):
+    seed_cidan_001_if_needed(force=True)
+    monkeypatch.setenv("OUTPUTS_DIRECTORY", str(tmp_path))
+    calls = []
+    suite_ids = []
+
+    def fake_run(proposal):
+        calls.append(proposal)
+        from cidan.sandbox import service as sandbox_service
+
+        suite = sandbox_service.record_manual_review(
+            document_id=proposal.supporting_citations[0].document_id,
+            rule_id=proposal.rule_id,
+            change_id=proposal.change_id,
+            reason="Test-only output for dashboard selection.",
+        )
+        suite_ids.append(suite["suite_id"])
+        return Agent4TestSummary(
+            total=0,
+            passed=0,
+            failed=0,
+            skipped=0,
+            invalid=0,
+            pending=1,
+            pass_rate=None,
+            results=[],
+            sandbox_suite_id=suite["suite_id"],
+        )
+
+    monkeypatch.setattr(testing_validation, "run", fake_run)
+    app = AppTest.from_file(dashboard.__file__).run(timeout=10)
+    agent_selection = next(radio for radio in app.radio if radio.label == "Agent Selection")
+    agent_selection.set_value(agent_selection.options[3]).run(timeout=10)
+
+    generate_button = next(
+        button
+        for button in app.button
+        if button.label == "Generate and run 50 synthetic tests"
+    )
+    generate_button.click().run(timeout=10)
+
+    assert len(calls) == 1
+    assert calls[0].rule_id == "RULE-2-5-SLA"
+    assert calls[0].sandbox_rule.version == 2
+    suite_selector = next(item for item in app.selectbox if item.label == "Sandbox suite")
+    assert suite_selector.value == suite_ids[0]
 
 

@@ -1,3 +1,6 @@
+import re
+from collections import Counter
+
 import pytest
 from unittest.mock import MagicMock
 
@@ -294,9 +297,13 @@ def test_agent3_storage_and_json_persistence(tmp_path, monkeypatch):
     assert test_wf in wf_list
 
 
-def test_agent4_interface_compatibility_with_generated_proposal():
+def test_agent4_interface_compatibility_with_generated_proposal(tmp_path, monkeypatch):
     """Verify that generated RuleProposal is completely compatible with Agent 4 testing_validation."""
     from cidan.agents import testing_validation
+    from cidan.sandbox import service as sandbox_service
+    from cidan.sandbox.validation import CASE_DISTRIBUTION
+
+    monkeypatch.setenv("OUTPUTS_DIRECTORY", str(tmp_path))
 
     # 1. Proposal requiring human review (no baseline/sandbox pair)
     ob = _make_obligation("OBL-002", "2.2")
@@ -348,9 +355,49 @@ def test_agent4_interface_compatibility_with_generated_proposal():
         unrelated_product_types=["commercial_loans"],
     )
 
-    # Calling testing_validation on sandbox_ready_proposal succeeds without schema issue
-    summary2 = testing_validation.run(sandbox_ready_proposal)
-    assert summary2 is not None
+    next_indexes = Counter()
+    boundary_amounts = [79999, 80000, 80001, 99999, 100000, 100001]
+
+    def fake_case_generation(schema, _system, prompt):
+        match = re.search(r"Generate exactly (\d+) cases in category '([^']+)'", prompt)
+        assert match
+        count, category = int(match.group(1)), match.group(2)
+        start = next_indexes[category]
+        cases = []
+        for index in range(start, start + count):
+            if category == "positive_normal":
+                inputs = {"product_type": "retail_banking", "amount": 120001 + index}
+            elif category == "negative":
+                inputs = {"product_type": "retail_banking", "amount": 1000 + index}
+            elif category == "boundary_value":
+                inputs = {
+                    "product_type": "retail_banking",
+                    "amount": boundary_amounts[index % len(boundary_amounts)],
+                }
+            elif category == "edge_case":
+                inputs = {"product_type": "retail_banking", "amount": index}
+            elif category == "regression":
+                inputs = {"product_type": "commercial_loans", "amount": index}
+            elif category == "missing_data_exception":
+                inputs = {"product_type": "retail_banking"}
+            else:
+                inputs = {"product_type": "retail_banking", "amount": 80001 + index}
+            cases.append({
+                "scenario": f"{category} case {index}",
+                "input_data": inputs,
+            })
+        next_indexes[category] += count
+        return schema(cases=cases)
+
+    summary2 = testing_validation.run(
+        sandbox_ready_proposal,
+        llm_call=fake_case_generation,
+    )
+    assert summary2.total == 50
+    assert summary2.passed == 50
+    assert summary2.failed == 0
+    suite = sandbox_service.get_suite(summary2.sandbox_suite_id)
+    assert suite["category_distribution"] == CASE_DISTRIBUTION
 
 
 def test_cidan_001_seeded_agent3_outputs():

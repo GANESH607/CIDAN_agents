@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -158,6 +159,8 @@ def generate_cases(
         )
 
     completed: list[TestCase] = []
+    seen_scenario_keys: set[str] = set()
+    seen_scenario_descriptions: set[str] = set()
     suite_token = uuid4().hex[:12]
     rule_context = json.dumps(
         {
@@ -169,6 +172,7 @@ def generate_cases(
 
     for category, required_count in CASE_DISTRIBUTION.items():
         remaining = required_count
+        rejected_duplicates: list[dict[str, Any]] = []
         while remaining:
             count = min(BATCH_SIZE, remaining)
             prompt = (
@@ -176,12 +180,18 @@ def generate_cases(
                 f"Known unrelated products for regression testing:\n{json.dumps(unrelated)}\n"
                 f"Previously accepted test scenarios and inputs:\n"
                 f"{json.dumps([{'scenario': case.scenario, 'input_data': case.input_data} for case in completed])}\n"
+                f"Previously rejected duplicate candidates for this category:\n"
+                f"{json.dumps(rejected_duplicates)}\n"
                 f"Generate exactly {count} cases in category {category!r}. "
+                f"These are requested case slots {required_count - remaining + 1} "
+                f"through {required_count - remaining + count}. "
                 f"Category-specific constraint: "
                 f"{_category_guidance(category, old_rule, proposed_rule, unrelated)} "
                 "Each case must provide only input_data and scenario. Do not return "
                 "expected outcomes, category labels, notes, or duplicate scenarios. "
-                "All cases must be distinct from the previously accepted cases."
+                "Make each scenario/input pair and each scenario description distinct "
+                "from all previously accepted cases. Include the requested slot number "
+                "in each scenario description."
             )
             for attempt in range(MAX_BATCH_ATTEMPTS):
                 attempted_batch: list[dict[str, Any]] = []
@@ -195,7 +205,7 @@ def generate_cases(
                             prompt,
                             max_tokens=get_settings().sandbox_llm_max_output_tokens,
                             method="json_mode",
-                            temperature=0.2,
+                            temperature=0.7,
                         )
                     )
                     attempted_batch = [
@@ -210,12 +220,11 @@ def generate_cases(
                         }
                         for candidate in batch.cases
                     ]
-                    if len(batch.cases) != count:
-                        raise ValueError(
-                            f"Groq returned {len(batch.cases)} cases for {category}; expected {count}."
-                        )
                     batch_cases = []
-                    for candidate in batch.cases:
+                    batch_scenario_keys: set[str] = set()
+                    batch_scenario_descriptions: set[str] = set()
+                    duplicate_candidates: list[dict[str, Any]] = []
+                    for candidate in batch.cases[:count]:
                         old_result = evaluate(old_rule, candidate.input_data)
                         proposed_result = evaluate(proposed_rule, candidate.input_data)
                         case = TestCase(
@@ -235,17 +244,32 @@ def generate_cases(
                         validate_case(
                             case, old_rule, proposed_rule, unrelated
                         )
+                        scenario = re.sub(
+                            r"\s+", " ", case.scenario
+                        ).strip().casefold()
+                        scenario_id = scenario_key(case)
+                        if (
+                            scenario_id in seen_scenario_keys
+                            or scenario_id in batch_scenario_keys
+                            or scenario in seen_scenario_descriptions
+                            or scenario in batch_scenario_descriptions
+                        ):
+                            duplicate_candidates.append(candidate.model_dump())
+                            continue
                         batch_cases.append(case)
-                    candidate_scenarios = {
-                        scenario_key(case)
-                        for case in [*completed, *batch_cases]
-                    }
-                    if len(candidate_scenarios) != len(completed) + len(batch_cases):
+                        batch_scenario_keys.add(scenario_id)
+                        batch_scenario_descriptions.add(scenario)
+                    if not batch_cases:
+                        rejected_duplicates = duplicate_candidates
                         raise ValueError(
-                            "Groq returned duplicate scenarios or inputs. Return "
-                            "different scenarios with different input data."
+                            "Groq returned only duplicate scenarios or inputs. "
+                            "Return distinct scenarios and input data."
                         )
                     completed.extend(batch_cases)
+                    seen_scenario_keys.update(batch_scenario_keys)
+                    seen_scenario_descriptions.update(batch_scenario_descriptions)
+                    remaining -= len(batch_cases)
+                    rejected_duplicates = duplicate_candidates
                     break
                 except OutputParserException:
                     if attempt == MAX_BATCH_ATTEMPTS - 1:
@@ -269,7 +293,6 @@ def generate_cases(
                         "distinct input values and scenario descriptions. "
                         f"Rejected batch for correction: {json.dumps(attempted_batch)}"
                     )
-            remaining -= count
 
     return validate_cases(
         completed, old_rule, proposed_rule, unrelated
