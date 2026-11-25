@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -193,6 +194,7 @@ def generate_cases(
                 "from all previously accepted cases. Include the requested slot number "
                 "in each scenario description."
             )
+            effective_max_tokens = get_settings().sandbox_llm_max_output_tokens
             for attempt in range(MAX_BATCH_ATTEMPTS):
                 attempted_batch: list[dict[str, Any]] = []
                 try:
@@ -203,7 +205,7 @@ def generate_cases(
                             CaseBatch,
                             SYSTEM,
                             prompt,
-                            max_tokens=get_settings().sandbox_llm_max_output_tokens,
+                            max_tokens=effective_max_tokens,
                             method="json_mode",
                             temperature=0.7,
                         )
@@ -293,6 +295,28 @@ def generate_cases(
                         "distinct input values and scenario descriptions. "
                         f"Rejected batch for correction: {json.dumps(attempted_batch)}"
                     )
+
+                except Exception as exc:
+                    err_str = str(exc)
+                    is_rate_or_size = (
+                        "413" in err_str
+                        or "429" in err_str
+                        or "rate_limit_exceeded" in err_str
+                        or "OTPM" in err_str
+                        or "output tokens per minute" in err_str
+                    )
+                    if is_rate_or_size and attempt < MAX_BATCH_ATTEMPTS - 1:
+                        m_lim = re.search(r"Limit\s+(\d+)", err_str)
+                        if m_lim:
+                            effective_max_tokens = min(
+                                effective_max_tokens,
+                                max(256, int(int(m_lim.group(1)) * 0.8)),
+                            )
+                        else:
+                            effective_max_tokens = min(effective_max_tokens, 800)
+                        time.sleep(2.0)
+                        continue
+                    raise
 
     return validate_cases(
         completed, old_rule, proposed_rule, unrelated
